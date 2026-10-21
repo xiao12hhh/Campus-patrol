@@ -1,0 +1,31 @@
+# 依赖与构建产物
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 环境与密钥
+.env
+.venv/
+venv/
+
+# 大体积原始素材（不入库）
+_models_raw/
+_shots/
+tools/_probe_out/
+
+# 根目录临时调试输出
+/_*.txt
+/_*.log
+/_*.err
+/_*.png
+
+# 智能体工作区状态
+.workbuddy/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,1 @@
+{"name":"cup-campus-twin","private":true,"version":"0.1.0","type":"module","scripts":{"dev":"vite --host 0.0.0.0","build":"vite build","preview":"vite preview"},"dependencies":{"@vitejs/plugin-react":"latest","gltfpack":"^1.2.0","lucide-react":"latest","meshoptimizer":"^1.2.0","react":"latest","react-dom":"latest","three":"latest","typescript":"latest","vite":"latest"}}
