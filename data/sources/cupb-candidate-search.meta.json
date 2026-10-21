@@ -1,0 +1,6 @@
+{
+  "source": "https://overpass-api.de/api/interpreter",
+  "retrieved_at": "2026-09-22T11:02:49.609103+00:00",
+  "query": "[out:json][timeout:60];(\n      nwr[\"name\"~\"中国石油|石油大学|China University of Petroleum|CUP\",i](40.10,116.05,40.35,116.45);\n      nwr[\"amenity\"=\"university\"][\"name\"~\"石油|petroleum|CUP\",i](40.10,116.05,40.35,116.45);\n    );out center tags;",
+  "license": "ODbL 1.0; see https://www.openstreetmap.org/copyright"
+}

@@ -1,0 +1,42 @@
+{
+ "provider": "map.cup.edu.cn",
+ "base": "https://map.cup.edu.cn/gis-server//upload/raster/2/{z}/{x}/{y}.png",
+ "levels": {
+  "16": {
+   "x0": 53927,
+   "x1": 53930,
+   "y0": 24757,
+   "y1": 24760,
+   "saved": 12,
+   "missing": 4,
+   "patched": 4
+  },
+  "17": {
+   "x0": 107855,
+   "x1": 107860,
+   "y0": 49515,
+   "y1": 49520,
+   "saved": 30,
+   "missing": 6,
+   "patched": 20
+  },
+  "18": {
+   "x0": 215710,
+   "x1": 215721,
+   "y0": 99030,
+   "y1": 99041,
+   "saved": 99,
+   "missing": 45,
+   "patched": 93
+  },
+  "19": {
+   "x0": 431420,
+   "x1": 431443,
+   "y0": 198060,
+   "y1": 198083,
+   "saved": 336,
+   "missing": 240,
+   "patched": 428
+  }
+ }
+}

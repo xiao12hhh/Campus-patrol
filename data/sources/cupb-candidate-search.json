@@ -1,0 +1,224 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API 0.7.62.11 87bfad18",
+  "osm3s": {
+    "timestamp_osm_base": "2026-09-22T11:01:50Z",
+    "copyright": "The data included in this document is from www.openstreetmap.org. The data is made available under ODbL."
+  },
+  "elements": [
+
+{
+  "type": "node",
+  "id": 11591914910,
+  "lat": 40.2166885,
+  "lon": 116.2445469,
+  "tags": {
+    "bus": "yes",
+    "name": "石油大学",
+    "name:zh": "石油大学",
+    "public_transport": "stop_position"
+  }
+},
+{
+  "type": "node",
+  "id": 11591914911,
+  "lat": 40.2166705,
+  "lon": 116.2446320,
+  "tags": {
+    "bus": "yes",
+    "highway": "bus_stop",
+    "name": "石油大学",
+    "name:zh": "石油大学",
+    "public_transport": "platform"
+  }
+},
+{
+  "type": "node",
+  "id": 11591914912,
+  "lat": 40.2162750,
+  "lon": 116.2445581,
+  "tags": {
+    "bus": "yes",
+    "name": "石油大学",
+    "name:zh": "石油大学",
+    "public_transport": "stop_position"
+  }
+},
+{
+  "type": "node",
+  "id": 11591914913,
+  "lat": 40.2162636,
+  "lon": 116.2444571,
+  "tags": {
+    "bus": "yes",
+    "highway": "bus_stop",
+    "name": "石油大学",
+    "name:zh": "石油大学",
+    "public_transport": "platform"
+  }
+},
+{
+  "type": "way",
+  "id": 389132078,
+  "center": {
+    "lat": 40.2141112,
+    "lon": 116.2502208
+  },
+  "tags": {
+    "building": "yes",
+    "leisure": "stadium",
+    "name": "中国石油大学体育馆",
+    "name:zh": "中国石油大学体育馆",
+    "name:zh-Hans": "中国石油大学体育馆",
+    "name:zh-Hant": "中國石油大學體育館"
+  }
+},
+{
+  "type": "way",
+  "id": 768393619,
+  "center": {
+    "lat": 40.1635613,
+    "lon": 116.2319773
+  },
+  "tags": {
+    "landuse": "industrial",
+    "name": "中国石油科技交流中心"
+  }
+},
+{
+  "type": "way",
+  "id": 768393620,
+  "center": {
+    "lat": 40.1605843,
+    "lon": 116.2372812
+  },
+  "tags": {
+    "landuse": "industrial",
+    "name": "中国石油数据中心"
+  }
+},
+{
+  "type": "way",
+  "id": 768393621,
+  "center": {
+    "lat": 40.1570201,
+    "lon": 116.2399382
+  },
+  "tags": {
+    "landuse": "industrial",
+    "name": "中国石油石油化工研究院"
+  }
+},
+{
+  "type": "way",
+  "id": 954539251,
+  "center": {
+    "lat": 40.1987282,
+    "lon": 116.2252271
+  },
+  "tags": {
+    "amenity": "fuel",
+    "brand": "中国石油",
+    "brand:en": "PetroChina",
+    "brand:wikidata": "Q503182",
+    "brand:wikipedia": "en:PetroChina",
+    "brand:zh": "中国石油",
+    "building": "roof",
+    "layer": "1",
+    "name": "中国石油",
+    "name:en": "PetroChina",
+    "name:zh": "中国石油"
+  }
+},
+{
+  "type": "way",
+  "id": 962102815,
+  "center": {
+    "lat": 40.1658754,
+    "lon": 116.2316300
+  },
+  "tags": {
+    "landuse": "industrial",
+    "name": "中国石油创新基地"
+  }
+},
+{
+  "type": "way",
+  "id": 962102816,
+  "center": {
+    "lat": 40.1655142,
+    "lon": 116.2348490
+  },
+  "tags": {
+    "amenity": "archive",
+    "building": "office",
+    "check_date": "2025-07-30",
+    "name": "中国石油档案馆"
+  }
+},
+{
+  "type": "way",
+  "id": 962102820,
+  "center": {
+    "lat": 40.1602388,
+    "lon": 116.2277613
+  },
+  "tags": {
+    "landuse": "industrial",
+    "name": "中国石油集团工程技术研究院有限公司"
+  }
+},
+{
+  "type": "way",
+  "id": 1304616500,
+  "center": {
+    "lat": 40.2096576,
+    "lon": 116.2395413
+  },
+  "tags": {
+    "amenity": "school",
+    "name": "中国石油大学附属中学"
+  }
+},
+{
+  "type": "way",
+  "id": 1536586131,
+  "center": {
+    "lat": 40.1643875,
+    "lon": 116.2352587
+  },
+  "tags": {
+    "landuse": "commercial",
+    "name": "中国石油档案馆"
+  }
+},
+{
+  "type": "relation",
+  "id": 13644491,
+  "center": {
+    "lat": 40.2160500,
+    "lon": 116.2447960
+  },
+  "tags": {
+    "addr:city": "北京市",
+    "addr:district": "昌平区",
+    "addr:housenumber": "18",
+    "addr:postcode": "102249",
+    "addr:province": "北京市",
+    "addr:street": "府学路",
+    "amenity": "university",
+    "internet_access": "yes",
+    "name": "中国石油大学（北京）",
+    "name:en": "China University of Petroleum - Beijing Campus",
+    "name:zh": "中国石油大学（北京）",
+    "operator": "中华人民共和国教育部",
+    "operator:type": "government",
+    "type": "multipolygon",
+    "website": "https://www.cup.edu.cn/",
+    "wikidata": "Q3274786",
+    "wikipedia": "zh:中国石油大学（北京）"
+  }
+}
+
+  ]
+}

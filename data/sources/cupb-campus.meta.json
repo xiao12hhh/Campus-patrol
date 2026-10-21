@@ -1,0 +1,10 @@
+{
+  "relation_id": "13644491",
+  "area_id": "3613644491",
+  "bbox": "40.195,116.215,40.238,116.275",
+  "source": "https://overpass-api.de/api/interpreter",
+  "retrieved_at": "2026-09-22T11:20:00.646884+00:00",
+  "query": "[out:json][timeout:120];\narea(3613644491)->.campus;\n(\n  way[building](area.campus);\n  relation[building](area.campus);\n  way[highway](area.campus);\n  nwr[entrance](area.campus);\n  nwr[amenity](area.campus);\n  nwr[leisure](area.campus);\n  nwr[natural](area.campus);\n  nwr[water](area.campus);\n);\nout body geom;",
+  "fallback_query": "[out:json][timeout:120];\n(\n  way[building](40.195,116.215,40.238,116.275);\n  way[highway](40.195,116.215,40.238,116.275);\n  nwr[entrance](40.195,116.215,40.238,116.275);\n  nwr[amenity](40.195,116.215,40.238,116.275);\n  nwr[leisure](40.195,116.215,40.238,116.275);\n  nwr[natural](40.195,116.215,40.238,116.275);\n  nwr[water](40.195,116.215,40.238,116.275);\n);\nout body geom;",
+  "license": "ODbL 1.0; see https://www.openstreetmap.org/copyright"
+}
