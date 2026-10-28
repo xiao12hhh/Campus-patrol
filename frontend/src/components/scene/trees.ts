@@ -1,4 +1,4 @@
-// 场景树木：栗树 PBR 贴图（来自 95.zip） + 交叉面片树冠。
+﻿// 场景树木：栗树 PBR 贴图（来自 95.zip） + 交叉面片树冠。
 // 每棵树 = 树干(12 三角形) + 3 片交叉面片(6 三角形)，全部走 InstancedMesh，
 // 整片林子只占 2 个 draw call，两千多棵也不掉帧。
 //
@@ -160,8 +160,8 @@ export function buildTrees(
   if (!tex) return null;
   // 密度：0.9 间距 + 2600 上限曾把校园盖成黑森林，树冠还压住路面 ——
   // 放宽到 1.5（≈15 m 一棵），上限砍到 1300，总观感是"行道树成排 + 绿地疏点"
-  const spacing = opt.spacing ?? 1.5;
-  const max = opt.max ?? 1300;
+  const spacing = opt.spacing ?? 1.78;
+  const max = opt.max ?? 1150;
   const rng = mulberry32(opt.seed ?? 777);
 
   // ---- 阻挡区：建筑 / 水面 / 运动场 ----

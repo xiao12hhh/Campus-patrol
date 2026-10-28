@@ -239,29 +239,32 @@ function applyLod(E: Engine, layers: Record<LayerKey, boolean>) {
 function applyQuality(E: Engine, q: Quality) {
   E.quality = q;
   const r = E.renderer;
+  const wantSize = q === 'high' ? 1024 : 512;
   if (q === 'high') {
     r.shadowMap.enabled = true;
-    E.sun.shadow.mapSize.set(1024, 1024);
     r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   } else if (q === 'medium') {
     r.shadowMap.enabled = true;
-    E.sun.shadow.mapSize.set(512, 512);
     r.setPixelRatio(1);
   } else {
     r.shadowMap.enabled = false;
     r.setPixelRatio(1);
   }
-  // 改了 shadow.mapSize 必须丢弃旧贴图，否则新尺寸不生效
-  const sm = E.sun.shadow.map;
-  if (sm) { sm.dispose(); }
-  (E.sun.shadow as unknown as { map: unknown }).map = null;
-  r.shadowMap.needsUpdate = true;
+  // 只在阴影图尺寸真的变化时重建贴图（原来每次都 dispose，切换档位会卡一下）
+  if (r.shadowMap.enabled && E.sun.shadow.mapSize.x !== wantSize) {
+    E.sun.shadow.mapSize.set(wantSize, wantSize);
+    const sm = E.sun.shadow.map;
+    if (sm) sm.dispose();
+    (E.sun.shadow as unknown as { map: unknown }).map = null;
+    r.shadowMap.needsUpdate = true;
+  }
   // 植被密度：低档隐藏一半（按索引奇偶，保证空间上均匀变稀而不是整片消失）
   E.groups.trees.children.forEach((m, i) => { m.visible = q === 'low' ? i % 2 === 0 : true; });
   // 低画质直接砍掉屋顶设备与路边设施，本帧即可生效，细节 LOD 随后每 0.4 s 复核一次
   if (E.kit && q === 'low') E.kit.visible = false;
   if (E.roadside && q === 'low') E.roadside.visible = false;
-  E.scene.traverse(o => { const mesh = o as THREE.Mesh; if (mesh.material) { const mat = mesh.material as THREE.Material; mat.needsUpdate = true; } });
+  // 注意：这里不能再对全场景材质打 needsUpdate —— 那会强制所有着色器重新编译，
+  // 一次几百毫秒，正是"退出第一人称/缩放回来时卡一下"的元凶。
 }
 
 interface Engine {
@@ -294,7 +297,8 @@ interface Engine {
   /** 画质档位：自动模式下由帧率统计驱动升降（见 applyQuality） */
   quality: Quality;
   autoQuality: boolean;
-  fpsAcc: number; fpsFrames: number; lowStreak: number; highStreak: number;
+  fpsAcc: number; fpsFrames: number; lowStreak: number; highStreak: number; qualHold: number;
+  frameNo: number;
   /** 程序化细节相关 */
   detail: DetailLevel;
   /** 屋顶设备 + 立面附件（距离 LOD 目标） */
@@ -411,13 +415,20 @@ function fitCampus(E: Engine, immediate: boolean) {
   const radius = 0.5 * Math.hypot(size.x, size.z);
 
   // 地面：略大于校园，配合雾自然过渡到天空
-  E.ground.geometry.dispose();
-  E.ground.geometry = new THREE.PlaneGeometry(size.x + radius * 1.2, size.z + radius * 1.2);
+  // 尺寸没变就不重建（resize 时每次都 dispose+new PlaneGeometry 会触发一次 GPU 重新上传）
+  const gw = size.x + radius * 1.2;
+  const gh = size.z + radius * 1.2;
+  const prevSize = E.ground.geometry.userData.size as { w: number; h: number } | undefined;
+  if (!prevSize || Math.abs(prevSize.w - gw) > 0.5 || Math.abs(prevSize.h - gh) > 0.5) {
+    E.ground.geometry.dispose();
+    E.ground.geometry = new THREE.PlaneGeometry(gw, gh);
+    E.ground.geometry.userData.size = { w: gw, h: gh };
+  }
   E.ground.position.set(box.getCenter(new THREE.Vector3()).x, 0, box.getCenter(new THREE.Vector3()).z);
 
   const fog = E.scene.fog as THREE.Fog;
-  fog.near = radius * (mapMode ? 2.2 : 1.35);
-  fog.far = radius * (mapMode ? 6.5 : 5.5);
+  fog.near = radius * (mapMode ? 2.4 : 1.95);
+  fog.far = radius * (mapMode ? 7.5 : 8.0);
 
   const sc = E.sun.shadow.camera;
   sc.left = -radius * 1.1; sc.right = radius * 1.1;
@@ -432,7 +443,8 @@ function fitCampus(E: Engine, immediate: boolean) {
   const dir = mapMode ? MAP_HOME_DIR : HOME_DIR;
   const { dist, target } = fitDistance(box, dir, tanV, tanH);
   // 地图模式再拉近 8%：fitDistance 是"刚好装下"的距离，官方地图的观感更满一些
-  const pos = target.clone().add(dir.clone().multiplyScalar(dist * (mapMode ? 0.74 : 1.04)));
+  // 三维孪生模式贴近一些（原来 1.04 太远，首屏核心区糊成一块）；地图模式保持官方观感
+  const pos = target.clone().add(dir.clone().multiplyScalar(dist * (mapMode ? 0.74 : 0.80)));
   E.home = { pos, target: target.clone() };
   E.controls.minDistance = 3;
   E.controls.maxDistance = dist * 2.6;
@@ -626,6 +638,9 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
+    // 阴影隔帧更新（见渲染循环）：阴影几乎只随太阳与机器人变化，每帧重算全场景投影是最大的一笔固定开销
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
     el.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -680,7 +695,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       quality: 'high', autoQuality: true,
       detail: detailRef.current,
       kit: null, roadside: null, shared: null, budget: newBudget(), lodAcc: 0,
-      fpsAcc: 0, fpsFrames: 0, lowStreak: 0, highStreak: 0,
+      fpsAcc: 0, fpsFrames: 0, lowStreak: 0, highStreak: 0, qualHold: 0, frameNo: 0,
       dogProto: null,
       dogState: 'loading',
       treeTex: null,
@@ -700,6 +715,17 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       },
     };
     eng.current = engine;
+    // 调试出口（自动化验证用）：在控制台/CDP 里读相机、跟随与机器狗的真实状态
+    (window as unknown as Record<string, unknown>).__scene_debug = {
+      cam: () => engine.camera.position.toArray().map(n => +n.toFixed(2)),
+      tgt: () => engine.controls.target.toArray().map(n => +n.toFixed(2)),
+      follow: () => engine.followId,
+      fp: () => cb.current.firstPerson,
+      dogState: () => engine.dogState,
+      robots: () => Array.from(engine.robots.entries())
+        .map(([id, r]) => [id, r.group.position.toArray().map(n => +n.toFixed(2))]),
+      controls: () => engine.controls.enabled,
+    };
     scene.add(engine.tiles.group);
 
     // ---- 官方瓦片：异步加载清单与网格，就绪后按当前模式挂载并触发一次取景
@@ -837,9 +863,16 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       const t = nowT;
       const E = engine;
 
+      // 阴影隔帧重算：投影贴图是每帧最贵的一笔（全场景 casters 再走一遍深度），
+      // 而场景里只有机器狗在动，隔帧更新肉眼看不出来，帧耗时能降一大截。
+      E.frameNo = (E.frameNo + 1) % 2;
+      if (E.frameNo === 0) E.renderer.shadowMap.needsUpdate = true;
+
       // 自动画质：每秒统计一次帧率，连续偏低就降档、持续富余就升档。
       // 需要连续多次才动作，避免建筑加载等瞬时卡顿把画质误杀到最低。
+      // 切档后 6 秒内不再动作：切档本身要重建阴影图，来回切会更卡。
       if (E.autoQuality) {
+        if (E.qualHold > 0) E.qualHold = Math.max(0, E.qualHold - dt);
         E.fpsAcc += dt; E.fpsFrames++;
         if (E.fpsAcc >= 1) {
           const fps = E.fpsFrames / E.fpsAcc;
@@ -848,11 +881,12 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           if (fps < 30) { E.lowStreak++; E.highStreak = 0; }
           else if (fps > 55) { E.highStreak++; E.lowStreak = 0; }
           else { E.lowStreak = 0; E.highStreak = 0; }
-          if (E.lowStreak >= 2 && i > 0) {
-            applyQuality(E, QUALITY_ORDER[i - 1]); E.lowStreak = 0;
+          if (E.qualHold > 0) { E.lowStreak = 0; E.highStreak = 0; }
+          else if (E.lowStreak >= 3 && i > 0) {
+            applyQuality(E, QUALITY_ORDER[i - 1]); E.lowStreak = 0; E.qualHold = 6;
             cb.current.onQualityChange?.(QUALITY_ORDER[i - 1]);
-          } else if (E.highStreak >= 4 && i < QUALITY_ORDER.length - 1) {
-            applyQuality(E, QUALITY_ORDER[i + 1]); E.highStreak = 0;
+          } else if (E.highStreak >= 5 && i < QUALITY_ORDER.length - 1) {
+            applyQuality(E, QUALITY_ORDER[i + 1]); E.highStreak = 0; E.qualHold = 6;
             cb.current.onQualityChange?.(QUALITY_ORDER[i + 1]);
           }
         }
@@ -990,16 +1024,23 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       let firstPerson = false;
       if (E.followId) {
         const rv = E.robots.get(E.followId);
-        if (rv) {
+        // 模型还没加载好（软件渲染环境里 GLB 可能一直加载不出来）时，用遥测数据兜底，
+        // 至少让第一人称/跟随还有东西可以跟，而不是点了没反应
+        const fallback = rv ? null : (cb.current.robots || []).find(r => r.id === E.followId);
+        if (rv || fallback) {
+          const pos = rv ? rv.group.position : B.W(fallback!.x, 0, fallback!.z);
+          const baseYaw = rv ? rv.group.rotation.y : -(fallback!.heading || 0);
           if (cb.current.firstPerson) {
             // 第一人称：相机放在狗头位置，视线方向 = 狗朝向 + 用户拖拽出来的 yaw/pitch 偏移
             firstPerson = true;
-            const yaw = rv.group.rotation.y + E.fpYaw;
+            const yaw = baseYaw + E.fpYaw;
             tmp.set(0, 0, -1).applyAxisAngle(Y_AXIS, yaw).normalize();
-            const eye = rv.group.position.clone().addScaledVector(tmp, 0.3);
+            const eye = pos.clone().addScaledVector(tmp, 0.3);
             // 眼高 0.3 单位 ≈ 3 m：狗模型缩到 0.42 后约 2.9 m 高，这个高度刚好在"头顶"
             eye.y += 0.3;
-            camera.position.lerp(eye, 1 - Math.pow(1e-7, dt));
+            // 离得远（刚进第一人称）直接吸附，慢机器上也不会"慢慢飘过去"
+            const gapEye = camera.position.distanceTo(eye);
+            camera.position.lerp(eye, gapEye > 2 ? 1 : 1 - Math.pow(1e-7, dt));
             const look = camera.position.clone().addScaledVector(tmp, 10);
             // pitch 用位移换算，10 单位远处抬升 tan(pitch)*10，视觉上线性好控制
             look.y += Math.tan(E.fpPitch) * 10;
@@ -1008,12 +1049,12 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
             E.controls.enabled = false;
           } else {
             // 第三人称跟随：偏移量随狗模型一起缩小（原来按 7 m 高的狗定的 3.2/7.5）
-            tmp.set(0, 1.15, 2.7).applyAxisAngle(Y_AXIS, rv.group.rotation.y);
-            const desired = rv.group.position.clone().add(tmp);
+            tmp.set(0, 1.15, 2.7).applyAxisAngle(Y_AXIS, baseYaw);
+            const desired = pos.clone().add(tmp);
             // 距离太远（刚切进来/刚重建）直接吸附，否则缓动——避免和 controls.update() 拉锯导致永远跟不近
             const gap = camera.position.distanceTo(desired);
             camera.position.lerp(desired, gap > 6 ? 1 : 1 - Math.pow(0.002, dt));
-            E.controls.target.lerp(rv.group.position.clone().add(new THREE.Vector3(0, 0.32, 0)), 1 - Math.pow(0.01, dt));
+            E.controls.target.lerp(pos.clone().add(new THREE.Vector3(0, 0.32, 0)), 1 - Math.pow(0.01, dt));
             E.controls.enabled = false;
           }
         } else E.controls.enabled = true;
@@ -1130,7 +1171,18 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     // 性能预算实测：draw call / 实例数 / 三角面
     E.budget = budget;
     applyLod(E, cb.current.layers);
-    console.log(`[scene] 细节=${E.detail} drawcall≈${budget.drawCalls} 实例=${budget.instances} `
+    // 预热着色器 + 贴图：编译所有 program，并把名牌的 canvas 贴图先上传到 GPU。
+    // 否则第一次拉远/转视角时，新出现的名牌纹理要现场上传，一帧里叠几十张就是几百毫秒的卡顿。
+    requestAnimationFrame(() => {
+      try {
+        E.renderer.compile(E.scene, E.camera);
+        for (const e of E.labelEntries) {
+          const map = (e.sprite.material as THREE.SpriteMaterial).map;
+          if (map) E.renderer.initTexture(map);
+        }
+      } catch { /* 预热失败不影响渲染 */ }
+    });
+    console.log(`[scene] 细节=${E.detail} drawcall≈${budget.drawCalls} 实例≈${budget.instances} `
       + `三角面≈${Math.round(budget.triangles / 1000)}k`, budget.byPool);
 
   }, [props.features, props.landmarks, props.detail, treeReady]);

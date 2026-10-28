@@ -15,7 +15,7 @@ export const W = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z)
 // 仅保留极小的下限，避免 1 层门房这类 4 m 建筑退化成薄片。
 // 视觉高度压缩：按真实高度渲染时楼群显得过于拥挤（俯视下楼的体量把间距吃光），
 // 官方手绘瓦片里楼高也是被压缩的（约为真实感的 0.5~0.6）。0.65 兼顾辨识度与疏朗。
-export const HEIGHT_SCALE = 0.65;
+export const HEIGHT_SCALE = 0.8;
 const HEIGHT_MIN = 0.35;
 export const visualHeight = (h: number) => Math.max(HEIGHT_MIN, (h || 0.4) * HEIGHT_SCALE);
 

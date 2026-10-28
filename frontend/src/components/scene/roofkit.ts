@@ -57,6 +57,25 @@ function normalizeRing(ring: number[][]): number[][] {
 }
 
 /**
+ * 渲染用的轮廓内缩 —— 只影响画出来的体块，数据里的真实坐标与质心一律不动。
+ * 真实校园里两栋楼之间至少有 8~20 m 的道路或绿化，但把每栋楼按原始轮廓画满、
+ * 再叠上挑檐和基座外扩，缝就被吃掉，整片建筑看起来糊成一团（"太挤"）。
+ * 这里统一收 BREATH_IN，让楼群之间透出缝，相对位置反而更容易读。
+ */
+const BREATH_IN = M(1.2);   // 每边内缩 1.2 m，两栋楼之间因此多出 2.4 m
+function breathRing(ring: number[][]): number[][] {
+  const a0 = Math.abs(signedArea(ring));
+  if (!a0) return ring;
+  for (const k of [1, 0.62, 0.35]) {
+    const out = offsetRing(ring, -BREATH_IN * k);
+    const a1 = Math.abs(signedArea(out));
+    // 缩得太多（细长条/小体量会退化）就退回上一档；只要确实缩了一点就采用
+    if (a1 > a0 * 0.55 && a1 < a0 * 0.995) return out;
+  }
+  return ring;
+}
+
+/**
  * 屋面「可摆设备」的安全环 —— 轮廓向内退掉女儿墙厚度 + 外侧余量 + 最小净距。
  * 导出是为了让离线校验脚本能对每台设备复核「确实落在安全环内」。
  */
@@ -484,7 +503,8 @@ export function buildBuildingsDetailed(
     const facade = facades[fi++ % facades.length];
 
     for (const rawRing of rings) {
-      const ring = normalizeRing(rawRing);
+      // 视觉上把每栋楼收 1.2 m，让楼群看起来不再粘连（数据坐标不动）
+      const ring = breathRing(normalizeRing(rawRing));
       if (ring.length < 4) continue;
       // OSM 源（东校区等）没有实测高度，普遍矮一截；保底 1.2（12 m）避免"扁线框"
       const h = p.source === 'map.cup.edu.cn' ? visualHeight(f.height)

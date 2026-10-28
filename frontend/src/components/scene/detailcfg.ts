@@ -1,4 +1,4 @@
-// 程序化视觉细节的统一参数表 + 通用画布工具。
+﻿// 程序化视觉细节的统一参数表 + 通用画布工具。
 //
 // 单位约定：campus-local.json 的 unit_meters = 10，即 **1 场景单位 = 10 米**。
 // 本文件里所有尺寸都先写成「米」再经 M() 换算，避免到处出现 0.0xx 这种看不出含义的魔法数。
@@ -36,15 +36,15 @@ export interface DetailCfg {
 
 export const DETAIL_PRESETS: Record<DetailLevel, DetailCfg> = {
   lean: {
-    blocks: true, equipPer100m2: 0.8, equipMaxPerBuilding: 8, equipMinRoofArea: 600,
+    blocks: true, equipPer100m2: 0.4, equipMaxPerBuilding: 4, equipMinRoofArea: 600,
     facadeWallAC: false, facadeDownpipe: false, curb: true, manhole: false,
   },
   standard: {
-    blocks: true, equipPer100m2: 1.4, equipMaxPerBuilding: 16, equipMinRoofArea: 260,
+    blocks: true, equipPer100m2: 0.7, equipMaxPerBuilding: 8, equipMinRoofArea: 260,
     facadeWallAC: true, facadeDownpipe: true, curb: true, manhole: true,
   },
   rich: {
-    blocks: true, equipPer100m2: 2.4, equipMaxPerBuilding: 28, equipMinRoofArea: 120,
+    blocks: true, equipPer100m2: 1.2, equipMaxPerBuilding: 14, equipMinRoofArea: 120,
     facadeWallAC: true, facadeDownpipe: true, curb: true, manhole: true,
   },
 };
