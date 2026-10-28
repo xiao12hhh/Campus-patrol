@@ -152,3 +152,9 @@ main.grid-mode .dock { display: none; }
 /* 工具条收窄：分享/截图收进「更多」弹出 */
 .stage-tools .layers-menu label{ cursor:pointer; }
 .stage-tools .layers-menu label:hover{ color:#176b56; }
+
+/* 方格地图模式下隐藏三维场景自带的浮层（iframe 有自己的头部） */
+main.grid-mode .map-brand-chip,
+main.grid-mode .map-status,
+main.grid-mode .map-compass,
+main.grid-mode .map-attribution { display:none; }
