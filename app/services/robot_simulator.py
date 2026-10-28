@@ -146,6 +146,8 @@ class RobotSimulator:
     """每秒一个 tick：推进状态机、生成事件、向 WebSocket 客户端广播。"""
 
     MOVE_SPEED = 0.35       # 单位/秒 ≈ 3.5 m/s（演示节奏）
+    STUCK_EPS = 0.02        # 一个 tick 位移小于 0.02 单位（0.2 m）就算没动
+    STUCK_TICKS = 3         # 连续 3 个 tick 没动 → 判定卡住并解困
     DETECT_SECONDS = 4
     DRAIN_PER_TICK = 0.12
     CHARGE_PER_TICK = 1.6
@@ -160,6 +162,8 @@ class RobotSimulator:
         self._dock_target: dict[str, dict] = {}
         self._path: dict[str, list] = {}          # 当前规划出的剩余路径（世界坐标折线）
         self._path_key: dict[str, tuple] = {}     # 该路径对应的目标点，目标变了才重算
+        self._stuck: dict[str, int] = {}          # 连续多少个 tick 几乎没挪动
+        self._recover: dict[str, int] = {}        # 当前目标已经尝试过几次解困
         _seed_events()
         self._snap_spawn()
 
@@ -332,15 +336,61 @@ class RobotSimulator:
             pts = grid.plan((robot["x"], robot["z"]), (target["x"], target["z"])) if grid else []
             self._path[rid] = [list(p) for p in pts]
             self._path_key[rid] = key
+            self._stuck[rid] = 0
+            self._recover[rid] = 0
         path = self._path.get(rid) or []
-        while path and math.hypot(path[0][0] - robot["x"], path[0][1] - robot["z"]) < 0.18:
-            path.pop(0)
+        while path:
+            # 最后一个点是吸附到楼边上的点，贴墙时进不到 0.18，放宽到 0.45
+            tol = 0.45 if len(path) == 1 else 0.18
+            if math.hypot(path[0][0] - robot["x"], path[0][1] - robot["z"]) < tol:
+                path.pop(0)
+            else:
+                break
         robot["path"] = [[round(p[0], 2), round(p[1], 2)] for p in path]
         if not path:
             robot["speed"] = 0.0
+            self._stuck[rid] = 0
             return True
+
+        bx, bz = robot["x"], robot["z"]
         self._move_toward(robot, {"x": path[0][0], "z": path[0][1]})
-        return False
+        if math.hypot(robot["x"] - bx, robot["z"] - bz) >= self.STUCK_EPS:
+            self._stuck[rid] = 0
+            return False
+
+        # 几乎没挪动：连续几个 tick 就认定卡住（墙角 / 楼间窄缝 / 目标贴在墙上）
+        self._stuck[rid] = self._stuck.get(rid, 0) + 1
+        if self._stuck[rid] < self.STUCK_TICKS:
+            return False
+
+        self._stuck[rid] = 0
+        self._recover[rid] = self._recover.get(rid, 0) + 1
+
+        # 贴着目标墙边磨蹭：离最后一点不到 2 个单位就当作到了，别在墙角耗着
+        last = path[-1]
+        if math.hypot(last[0] - robot["x"], last[1] - robot["z"]) < 2.0:
+            self._path[rid] = []
+            robot["path"] = []
+            robot["speed"] = 0.0
+            return True
+
+        if grid is not None and self._recover[rid] <= 2:
+            # 先把自己挪到最近的可行点，再重算路径（相当于"蹭出墙角"）
+            nx, nz = grid.free_spot(robot["x"], robot["z"])
+            robot["x"], robot["z"] = round(nx, 3), round(nz, 3)
+            self._path[rid] = []
+            self._path_key[rid] = None
+            robot["path"] = []
+            return False
+
+        # 两轮还出不来，就放弃这个点，让调用方推进到下一站
+        self._path[rid] = []
+        self._path_key[rid] = None
+        robot["path"] = []
+        robot["speed"] = 0.0
+        _emit_event(robot, {"type": "路径受阻", "level": "warning",
+                            "message": f"{robot.get('mission') or '巡检'} · 该点绕障失败，已转到下一站"})
+        return True
 
     @staticmethod
     def _move_toward(robot: dict, target: dict) -> None:
