@@ -1737,44 +1737,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
   return (
     <div className="scene-wrap" ref={hostRef}>
       <div className="map-brand-chip"><span className="map-brand-mark">石</span><div><b>石大·云游校园</b><small>CHINA UNIVERSITY OF PETROLEUM · CAMPUS EXPLORER</small></div></div>
-      <div className="map-explore-chip"><b>校园探索</b><span>展开⌃</span></div>
       <div className="map-compass"><b>N</b><span>▲</span></div>
-      <div className="map-tools" aria-label="地图工具">
-        <button title="放大" aria-label="放大" onClick={() => eng.current && (eng.current.controls.dollyIn(1.24), eng.current.controls.update())}>＋</button>
-        <button title="缩小" aria-label="缩小" onClick={() => eng.current && (eng.current.controls.dollyOut(1.24), eng.current.controls.update())}>−</button>
-        <button title="显示/隐藏地名" aria-label="显示或隐藏地名" onClick={() => {
-          const E = eng.current;
-          if (!E) return;
-          E.groups.labels.visible = !E.groups.labels.visible;
-          cb.current.onToggleLayer?.('labels', E.groups.labels.visible);
-        }}>◈</button>
-        <button title="回到校园总览" aria-label="回到校园总览" onClick={() => {
-          const E = eng.current;
-          if (!E) return;
-          if (!E.home) fitCampus(E, false);
-          E.tween = {
-            t0: performance.now() / 1000, dur: 1.6,
-            fromPos: E.camera.position.clone(), toPos: E.home!.pos.clone(),
-            fromTarget: E.controls.target.clone(), toTarget: E.home!.target.clone(),
-          };
-        }}>◉</button>
-        <button title="复位视角" aria-label="复位视角" onClick={() => {
-          const E = eng.current;
-          if (!E) return;
-          if (!E.home) fitCampus(E, false);
-          E.tween = {
-            t0: performance.now() / 1000, dur: 1.6,
-            fromPos: E.camera.position.clone(), toPos: E.home!.pos.clone(),
-            fromTarget: E.controls.target.clone(), toTarget: E.home!.target.clone(),
-          };
-        }}>↻</button>
-        <button title="全屏" aria-label="全屏" onClick={() => {
-          const el = hostRef.current;
-          if (!el) return;
-          if (document.fullscreenElement) void document.exitFullscreen?.();
-          else void el.requestFullscreen?.();
-        }}>⛶</button>
-      </div>
       <div className="map-status"><span className="map-live-dot"/> 实时校园 · 昌平校区</div>
       <div className="scene-hint">官方手绘底图 · 拖拽旋转 · 滚轮缩放 · 点击建筑或机器人</div>
       <div className="map-attribution">© 中国石油大学（北京）可视化位置服务平台 · © OpenStreetMap contributors · ODbL</div>

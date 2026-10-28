@@ -1,10 +1,10 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import CampusScene, { SceneHandle, TimeOfDay, LayerKey, DEFAULT_LAYERS, ViewPreset, FocusBox, Quality, QUALITY_LABEL, ViewMode } from './components/CampusScene';
 import { DetailLevel, DETAIL_LABEL } from './components/scene/detailcfg';
 import {
   getRobots, getEvents, controlMission, solveVRPTW, robotSocket,
   setRobotQueue, clearRobotQueue,
-  Robot, RobotEvent, VRPTWSolution, Waypoint,
+  Robot, RobotEvent, VRPTWSolution, Waypoint, LinkState,
 } from './lib/api';
 import { CampusData, toLandmarks, matchLandmark, CATEGORY_LABEL, Landmark, LandmarkCategory, campusRingsOf } from './lib/campus';
 
@@ -89,6 +89,9 @@ export default function App() {
   const [catFilter, setCatFilter] = useState<LandmarkCategory | null>(null);
   const [quality, setQuality] = useState<Quality>('high');
   const [autoQuality, setAutoQuality] = useState(true);
+  /** 与后端的连接状态：断线时头部变黄并自动重连，界面数据退回轮询 */
+  const [link, setLink] = useState<LinkState>('connecting');
+  const linkRef = useRef<LinkState>('connecting');
   const [detail, setDetail] = useState<DetailLevel>('standard');
   const [tour, setTour] = useState({ active: false, paused: false, index: 0, total: 0, name: '' });
   const [vrptw, setVrptw] = useState({ clock: 480, playing: false, speed: 8, min: 470, max: 620 });
@@ -167,8 +170,13 @@ export default function App() {
     // 带上版本参数穿透缓存，保证数据更新后浏览器不会拿旧 JSON
     fetch(`/data/campus-local.json?v=${import.meta.env.DEV ? Date.now() : DATA_VERSION}`)
       .then(r => r.json()).then(setCampus).catch(() => setCampus(null));
-    getRobots().then(setRobots).catch(() => {});
-    getEvents().then(setEvents).catch(() => {});
+    let alive = true;
+    // 全量拉一次（首屏、重连后、轮询兜底都走这里）
+    const pullAll = () => {
+      getRobots().then(d => { if (alive) setRobots(d); }).catch(() => {});
+      getEvents().then(d => { if (alive) setEvents(d); }).catch(() => {});
+    };
+    pullAll();
     const ws = robotSocket(msg => {
       if (msg.type === 'robot_state') {
         setRobots(old => old.map(r => (r.id === (msg as any).id ? { ...r, ...(msg as any) } : r)));
@@ -177,8 +185,16 @@ export default function App() {
         setEvents(old => [ev, ...old].slice(0, 24));
         notify(`${ev.type} · ${ev.location}`);
       }
+    }, s => {
+      setLink(s);
+      linkRef.current = s;
+      if (s === 'open') pullAll();  // 重连后补一次全量，避免中间那段状态缺口
     });
-    return () => ws.close();
+    // 断线期间退回 REST 轮询，界面数据不冻结
+    const poll = window.setInterval(() => {
+      if (linkRef.current !== 'open') pullAll();
+    }, 5000);
+    return () => { ws.close(); clearInterval(poll); };
   }, []);
 
   // ---- VRPTW 时间轴推进（1 real s = speed 模拟分钟）
@@ -345,7 +361,13 @@ export default function App() {
             <small>中国石油大学（北京） · DIGITAL TWIN</small>
           </div>
         </div>
-        <div className="live">● 系统在线 · 底图 © 中国石油大学（北京）可视化位置服务平台</div>
+        <div className={`live live-${link}`}>
+          {link === 'open'
+            ? '● 系统在线 · 底图 © 中国石油大学（北京）可视化位置服务平台'
+            : link === 'connecting'
+              ? '◐ 正在连接后端 · 底图 © 中国石油大学（北京）可视化位置服务平台'
+              : '○ 后端断开，正在重连 · 数据已切到轮询'}
+        </div>
         <div className="header-campus-state"><span className="state-dot"/> 昌平 · 校园数字孪生 <button onClick={() => notify('官方地图瓦片 + OSM 数据已同步')}>ⓘ</button></div>
       </header>
 
@@ -433,8 +455,14 @@ export default function App() {
                 </div>
               </details>
               <button className="ghost" onClick={() => sceneRef.current?.resetView()}>复位</button>
-              <button className="ghost" onClick={shareView}>分享视角</button>
-              <button className="ghost" onClick={() => sceneRef.current?.screenshot()}>截图</button>
+              <button className="ghost" onClick={() => sceneRef.current?.fullscreen()} title="全屏查看（Esc 退出）">全屏</button>
+              <details className="layers-pop">
+                <summary className="ghost">更多</summary>
+                <div className="layers-menu">
+                  <label onClick={shareView}>分享视角（复制链接）</label>
+                  <label onClick={() => sceneRef.current?.screenshot()}>保存当前画面</label>
+                </div>
+              </details>
               <details className="layers-pop">
                 <summary className={`ghost ${autoQuality ? 'on' : ''}`}>画质 {QUALITY_LABEL[quality]}</summary>
                 <div className="layers-menu">

@@ -83,3 +83,72 @@ main.grid-mode .stage { grid-column: 2; }
 main.grid-mode .stage-top,
 main.grid-mode .scene-hint,
 main.grid-mode .dock { display: none; }
+
+/* ================= 顶部叠层重排（2026-10-28） =================
+   原来三套东西都挤在 top:12~18px：App 的模块标题/工具条、场景的品牌条、
+   状态胶囊和罗盘互相压字。这里分成两条互不重叠的横带：
+     row1 (top 14)  左：品牌条            右：状态胶囊 + 罗盘
+     row2 (top 76)  左：模块标题（白卡）  右：工具条
+*/
+.map-brand-chip{ top:14px; left:16px; }
+.map-status{ top:14px; right:76px; }
+.map-compass{ top:14px; right:16px; }
+
+.stage-top{
+  top:76px; left:16px; right:16px;
+  align-items:flex-start; gap:14px;
+}
+.stage-top > div:first-child{
+  max-width:min(46%, 420px);
+  padding:9px 13px 10px;
+  border-radius:12px;
+  background:#fbfdf9ed;
+  box-shadow:0 7px 22px #3f65431f;
+  backdrop-filter:blur(6px);
+}
+.stage-top > div:first-child b{ font-size:15px; color:#214a3a; text-shadow:none; }
+.stage-top small{ color:#7d9488; text-shadow:none; }
+
+.stage-tools{
+  max-width:calc(100% - 60px);
+  padding:6px;
+  border-radius:12px;
+  background:#fbfdf9e6;
+  box-shadow:0 7px 22px #3f65431f;
+  backdrop-filter:blur(6px);
+}
+
+/* 品牌条与状态胶囊不再挡点击，但保持可读 */
+.map-brand-chip{ pointer-events:none; }
+
+@media (max-width: 1180px){
+  .stage-top > div:first-child{ max-width:38%; }
+  .stage-tools{ max-width:calc(100% - 20px); }
+}
+
+/* 收尾微调：工具条收成一条、白底不挡拖拽 */
+.stage-top > div:first-child{ width:262px; max-width:262px; }
+.stage-top > div:first-child small{ line-height:1.45; }
+.stage-tools{
+  width:max-content; max-width:calc(100% - 300px);
+  margin-left:auto;
+  padding:5px 6px;
+  gap:4px;
+  flex-wrap:nowrap;
+  pointer-events:none;             /* 容器不挡场景拖拽 */
+}
+.stage-tools > *{ pointer-events:auto; }
+.stage-tools .ghost,
+.stage-tools summary{ padding:5px 10px; font-size:11.5px; white-space:nowrap; }
+.stage-tools .view-switch button{ padding:5px 10px; font-size:11.5px; }
+
+@media (max-width: 1400px){
+  .stage-tools{ max-width:calc(100% - 292px); flex-wrap:wrap; }
+}
+.stage-tools > *{ flex:0 0 auto; }
+.stage-tools .view-switch{ display:flex; gap:2px; }
+.stage-tools .view-switch button{ white-space:nowrap; }
+
+/* 工具条收窄：分享/截图收进「更多」弹出 */
+.stage-tools .layers-menu label{ cursor:pointer; }
+.stage-tools .layers-menu label:hover{ color:#176b56; }
