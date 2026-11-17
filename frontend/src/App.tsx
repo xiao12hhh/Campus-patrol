@@ -1,8 +1,9 @@
+import NavigationLab from './components/NavigationLab';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import CampusScene, { SceneHandle, TimeOfDay, LayerKey, DEFAULT_LAYERS, ViewPreset, FocusBox, Quality, QUALITY_LABEL, ViewMode } from './components/CampusScene';
 import { DetailLevel, DETAIL_LABEL } from './components/scene/detailcfg';
 import {
-  getRobots, getEvents, controlMission, solveVRPTW, robotSocket,
+  API_BASE, getRobots, getEvents, controlMission, solveVRPTW, robotSocket,
   setRobotQueue, clearRobotQueue,
   Robot, RobotEvent, VRPTWSolution, Waypoint, LinkState,
 } from './lib/api';
@@ -11,7 +12,7 @@ import { CampusData, toLandmarks, matchLandmark, CATEGORY_LABEL, Landmark, Landm
 // v3 起原点移到三校区（北 / 南 / 东）整体中心；与 campus-local.json 的 origin 保持一致
 const ORIGIN = { lat: 40.2159, lng: 116.2449 };
 /** campus-local.json 的数据版本号，数据重建后手动 +1（配合 fetch 的 ?v= 穿透缓存） */
-const DATA_VERSION = 7;
+const DATA_VERSION = 8;
 const LAT_M = 111320;
 const toLatLng = (x: number, z: number) => ({
   lat: ORIGIN.lat - (z * 10) / LAT_M,
@@ -27,10 +28,10 @@ const JOB_DEFS: Array<[string, number, [string, string], number]> = [
   ['第三教学楼', 20, ['09:00', '10:30'], 8],
   ['中油大厦A座', 30, ['08:30', '10:30'], 12],
   ['第四教学楼', 15, ['09:20', '10:40'], 8],
-  ['东教学楼', 15, ['08:10', '09:30'], 8],
-  ['教学实验中心', 12, ['09:00', '10:30'], 6],
+  ['第二教学楼', 15, ['08:10', '09:30'], 8],
+  ['工程楼A座', 12, ['09:00', '10:30'], 6],
   ['国际交流中心', 10, ['08:00', '09:00'], 6],
-  ['汇才学生公寓1号楼', 25, ['08:10', '09:30'], 10],
+  ['青年园西区北楼', 25, ['08:10', '09:30'], 10],
   ['实验楼', 12, ['09:10', '10:40'], 6],
 ];
 
@@ -59,6 +60,7 @@ export default function App() {
     return q === 'robot' || q === 'route' || q === 'grid' ? (q as Module) : 'campus';
   });
   const [campus, setCampus] = useState<CampusData | null>(null);
+  const [region, setRegion] = useState('主校区');
   const [robots, setRobots] = useState<Robot[]>(SEED_ROBOTS);
   const [events, setEvents] = useState<RobotEvent[]>([]);
   const [solution, setSolution] = useState<VRPTWSolution | null>(null);
@@ -68,13 +70,21 @@ export default function App() {
     return t === 'dawn' || t === 'dusk' || t === 'night' ? t : 'day';
   });
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({ ...DEFAULT_LAYERS });
-  // 视图模式：官方手绘地图（默认） / 程序化三维孪生
+  // 视图模式：地理俯视地图（默认） / 程序化三维孪生
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const v = new URLSearchParams(location.search).get('v');
     return v === 'twin' ? 'twin' : 'map';
   });
   // 分享/自动化验证：?follow=SPOT-01 直接跟随机器狗，配合 ?fp=1 进第一人称
   const [followId, setFollowId] = useState<string | null>(() => new URLSearchParams(location.search).get('follow'));
+  const [closeThird, setCloseThird] = useState(false);
+  const [pedestrians, setPedestrians] = useState<any[]>([]);
+  useEffect(() => {
+    let live = true;
+    const poll = async () => { try { const r = await fetch(`${API_BASE}/api/navigation`, {signal: AbortSignal.timeout(8000)}); if(r.ok) { const data=await r.json(); if(live) {const next=data.obstacles.filter((o:any)=>o.kind==='行人');setPedestrians(prev=>JSON.stringify(prev)===JSON.stringify(next)?prev:next);} } } catch {} };
+    void poll(); const timer=setInterval(poll,2000);
+    return () => {live=false;clearInterval(timer);};
+  }, []);
   const [firstPerson, setFirstPerson] = useState(() => new URLSearchParams(location.search).get('fp') === '1');
   const [selectedRobot, setSelectedRobot] = useState('SPOT-01');
   // 任务队列草稿：先在界面上排好顺序，再一次性下发给选中的机器狗
@@ -107,13 +117,9 @@ export default function App() {
   // 主校区内容缩成中间一小块 —— 所以默认取景排除东校区环（按质心 x 判定），
   // 缩小视角或地图模式仍能看到它。
   const focusBox = useMemo<FocusBox | undefined>(() => {
-    const pts = campusRings
-      .filter(ring => {
-        // 东校区环质心 x≈+34，南/北校区 x≈-33/-37，阈值取中间
-        const cx = ring.reduce((a, q) => a + q[0], 0) / ring.length;
-        return cx < 15;
-      })
-      .flat();
+    const zones = campus?.campus?.zones ?? [];
+    const pts = zones.filter(z => region === '全部校区' || (region === '东校区' ? z.name === '东校区' : z.name !== '东校区'))
+      .flatMap(z => z.rings.flat());
     if (!pts.length) return undefined;
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const p of pts) {
@@ -122,7 +128,15 @@ export default function App() {
     }
     const mx = (x1 - x0) * 0.06, mz = (z1 - z0) * 0.06;
     return { x0: x0 - mx, x1: x1 + mx, z0: z0 - mz, z1: z1 + mz };
-  }, [campusRings]);
+  }, [campus, region]);
+  useEffect(() => {
+    if (!landmarks.length || linkRef.current === 'open') return;
+    const starts = ['主楼A座', '网球场', '主教'];
+    setRobots(current => current.map((r, i) => {
+      const l = landmarks.find(p => p.name === starts[i]);
+      return l ? { ...r, x: l.x, z: l.z + 1.5 } : r;
+    }));
+  }, [landmarks]);
   // 分类筛选与关键词搜索叠加生效（先按类别收窄，再匹配名字/别名）
   const filtered = useMemo(() => {
     let list = landmarks;
@@ -212,6 +226,7 @@ export default function App() {
 
   // ---- 模块切换：图层与视角联动
   useEffect(() => {
+    if (module !== 'robot') { setFirstPerson(false); setFollowId(null); }
     setLayers(l => ({ ...l, routes: module === 'route' && !!solution }));
     if (module === 'robot') sceneRef.current?.flyToXY(6, 22, 'overview');
     else if (module === 'route') sceneRef.current?.flyToXY(0, 2, 'overview');
@@ -308,9 +323,11 @@ export default function App() {
     notify('已清空任务队列');
   };
   const toggleFirstPerson = () => {
+    setCloseThird(false);
     const next = !firstPerson;
     setFirstPerson(next);
-    if (next) setFollowId(selectedRobot); // 第一人称必须绑定一台机器狗
+    if (next) setFollowId(selectedRobot);
+    else { setFollowId(null); sceneRef.current?.resetView(); }
   };
   const solve = async () => {
     setBusy(true);
@@ -363,12 +380,12 @@ export default function App() {
         </div>
         <div className={`live live-${link}`}>
           {link === 'open'
-            ? '● 系统在线 · 底图 © 中国石油大学（北京）可视化位置服务平台'
+            ? '● 系统在线 · 地理校界 © OSM · 校园平面图配准'
             : link === 'connecting'
-              ? '◐ 正在连接后端 · 底图 © 中国石油大学（北京）可视化位置服务平台'
+              ? '◐ 正在连接后端 · 地理校界 © OSM · 校园平面图配准'
               : '○ 后端断开，正在重连 · 数据已切到轮询'}
         </div>
-        <div className="header-campus-state"><span className="state-dot"/> 昌平 · 校园数字孪生 <button onClick={() => notify('官方地图瓦片 + OSM 数据已同步')}>ⓘ</button></div>
+        <div className="header-campus-state"><span className="state-dot"/> 昌平 · 校园数字孪生 <button onClick={() => notify('地图采用地理校界与校园平面布局；描图建筑为近似重建。')}>ⓘ</button></div>
       </header>
 
       <main className={module === 'grid' ? 'grid-mode' : ''}>
@@ -409,6 +426,8 @@ export default function App() {
             vrptwClock={vrptw.clock}
             followRobotId={followId}
             firstPerson={firstPerson}
+            closeThird={closeThird}
+            pedestrians={pedestrians}
           addPointMode={addPoint}
           onPickPoint={onPickPoint}
             tod={tod}
@@ -436,8 +455,11 @@ export default function App() {
               <small>{module === 'campus' ? '搜索地标 · 自动巡游 · 昼夜切换' : module === 'robot' ? '点击机器人可跟随视角' : module === 'grid' ? '32 个站点 · 36 格安全间距 · 最短路检索' : '时间窗约束 · 车辆调度回放'}</small>
             </div>
             <div className="stage-tools">
+              <select aria-label="校区范围" value={region} onChange={e => setRegion(e.target.value)}>
+                {['主校区', '东校区', '全部校区'].map(r => <option key={r}>{r}</option>)}
+              </select>
               <div className="view-switch" role="group" aria-label="视图模式">
-                <button className={viewMode === 'map' ? 'on' : ''} onClick={() => setViewMode('map')} title="map.cup.edu.cn 同款手绘底图">官方地图</button>
+                <button className={viewMode === 'map' ? 'on' : ''} onClick={() => setViewMode('map')} title="按地理校界配准的校园俯视布局">俯视地图</button>
                 <button className={viewMode === 'twin' ? 'on' : ''} onClick={() => setViewMode('twin')} title="程序化三维建筑数字孪生">三维孪生</button>
               </div>
               {TODS.map(([k, label]) => (
@@ -454,7 +476,7 @@ export default function App() {
                   ))}
                 </div>
               </details>
-              <button className="ghost" onClick={() => sceneRef.current?.resetView()}>复位</button>
+              <button className="ghost" onClick={() => { setFirstPerson(false); setFollowId(null); sceneRef.current?.resetView(); }}>复位</button>
               <button className="ghost" onClick={() => sceneRef.current?.fullscreen()} title="全屏查看（Esc 退出）">全屏</button>
               <details className="layers-pop">
                 <summary className="ghost">更多</summary>
@@ -551,14 +573,14 @@ export default function App() {
           )}
         </section>
 
-        <aside className="inspector" hidden={module === 'grid'}>
+        <aside className={`inspector ${module === 'robot' ? 'robot-inspector' : ''}`} hidden={module === 'grid'}>
           {module === 'campus' && (
             <>
               <div className="panel-head">
                 <div>
                   <div className="eyebrow">MODULE 01 / CAMPUS TWIN</div>
                   <h2>3D 校园浏览</h2>
-                  <p>OSM 真实轮廓 · 程序化立面</p>
+                  <p>真实校界 · 校园平面布局</p>
                 </div>
                 <span className="pill cyan">{landmarks.length} 地标</span>
               </div>
@@ -592,7 +614,7 @@ export default function App() {
                   {!filtered.length && <div className="muted pad">没有匹配的地标</div>}
                 </div>
               </div>
-              <div className="card note">建筑轮廓来自 OpenStreetMap 公开数据（ODbL），高度按 OSM 层数估算，立面为程序化纹理，非实测模型。</div>
+              <div className="card note">校界及已有楼宇轮廓来自 OSM；北校区缺失建筑按校园平面图配准重建。描图位置、楼高与立面存在估算，供校园浏览和巡检仿真使用。</div>
             </>
           )}
 
@@ -606,6 +628,7 @@ export default function App() {
                 </div>
                 <span className="pill green">{robots.filter(r => r.status !== '待命').length} 在线</span>
               </div>
+              <NavigationLab campus={campus} />
               <div className="card">
                 <div className="card-title">巡检编队</div>
                 {robots.map(r => (
@@ -633,7 +656,8 @@ export default function App() {
                     <button className={firstPerson ? 'primary' : 'ghost'} onClick={toggleFirstPerson}>
                       {firstPerson ? '退出第一人称' : '机器狗第一人称'}
                     </button>
-                    <button className="ghost" onClick={() => sceneRef.current?.flyToXY(0, 0, 'overview')}>回到全景</button>
+                    <button className={closeThird && followId ? 'primary' : 'ghost'} onClick={() => {setFirstPerson(false);setCloseThird(true);setFollowId(selectedRobot);setViewMode('twin');}}>近距离第三人称</button>
+                    <button className="ghost" onClick={() => {setFirstPerson(false);setCloseThird(false);setFollowId(null);sceneRef.current?.resetView();}}>回到全景</button>
                   </div>
                 </div>
               )}

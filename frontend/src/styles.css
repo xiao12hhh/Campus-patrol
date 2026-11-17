@@ -158,3 +158,8 @@ main.grid-mode .map-brand-chip,
 main.grid-mode .map-status,
 main.grid-mode .map-compass,
 main.grid-mode .map-attribution { display:none; }
+
+/* Robot controls share one scroll surface so the navigation map stays usable. */
+.inspector.robot-inspector{overflow-y:auto}
+.robot-inspector > *{flex-shrink:0}
+.robot-inspector > .card{overflow:visible;max-height:none}

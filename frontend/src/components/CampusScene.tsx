@@ -1,3 +1,4 @@
+import { robotCollision, advanceRobot, Point } from '../lib/robotMotion';
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -12,7 +13,7 @@ import { TileGround, makeMapLabelSprite, makeFootprintHighlight, MAP_BG } from '
 
 export type ViewPreset = 'overview' | 'front' | 'top' | 'close';
 export type TimeOfDay = 'dawn' | 'day' | 'dusk' | 'night';
-/** 地图模式 = 官方手绘瓦片地面（观感对齐 map.cup.edu.cn）；孪生模式 = 程序化三维建筑 */
+/** 地图模式 = 地理坐标下的俯视场景；孪生模式 = 程序化三维建筑 */
 export type ViewMode = 'map' | 'twin';
 export type LayerKey =
   | 'buildings' | 'roads' | 'water' | 'pitches' | 'trees' | 'green' | 'parking'
@@ -55,6 +56,8 @@ interface Props {
   followRobotId: string | null;
   /** 第一人称：跟随视角换成狗头视角（需同时打开 followRobotId） */
   firstPerson?: boolean;
+  closeThird?: boolean;
+  pedestrians?: Array<{id:string;x:number;z:number;heading:number;color:number}>;
   /** 「点图加点」模式：点击地面即回调坐标，用来快速给任务队列加路点 */
   addPointMode?: boolean;
   onPickPoint?(x: number, z: number): void;
@@ -177,6 +180,8 @@ interface RobotVis {
   cur: THREE.Vector3; target: THREE.Vector3; prev: THREE.Vector3;
   heading: number; targetHeading: number;
   routeLine: THREE.Line | null;
+  motionQueue: Point[];
+  labelText: string;
   pathRibbon: THREE.Mesh | null;
   pathSig: string;
   /** 自定义任务队列的可视化（队列点连线 + 编号立柱），签名不变就不重建 */
@@ -248,7 +253,7 @@ function applyQuality(E: Engine, q: Quality) {
     r.setPixelRatio(1);
   } else {
     r.shadowMap.enabled = false;
-    r.setPixelRatio(1);
+    r.setPixelRatio(0.75);
   }
   // 只在阴影图尺寸真的变化时重建贴图（原来每次都 dispose，切换档位会卡一下）
   if (r.shadowMap.enabled && E.sun.shadow.mapSize.x !== wantSize) {
@@ -294,6 +299,8 @@ interface Engine {
   urlCam: { pos: THREE.Vector3; target: THREE.Vector3 } | null;
   /** 第一人称的自由视角偏移（拖拽累积，弧度）：yaw 绕竖轴、pitch 俯仰 */
   fpYaw: number; fpPitch: number;
+  movementClear: (a: Point, b: Point) => boolean;
+  shadowAt: number;
   /** 画质档位：自动模式下由帧率统计驱动升降（见 applyQuality） */
   quality: Quality;
   autoQuality: boolean;
@@ -373,9 +380,9 @@ function fitDistance(box: THREE.Box3, dir: THREE.Vector3, tanV: number, tanH: nu
 const HOME_DIR = new THREE.Vector3(0.542, 0.643, 0.542).normalize();
 // 地图模式默认视角：官方地图是"从南侧看"的 2.5D 手绘，相机从南偏东抬起，
 // 瓦片上画的建筑立面（朝南）正对镜头，观感与官方截图一致。
-const MAP_HOME_DIR = new THREE.Vector3(0.1, 0.77, 0.63).normalize();
+const MAP_HOME_DIR = new THREE.Vector3(0, 0.985, 0.174).normalize();
 /** 地图模式下隐藏的程序化图层（瓦片里都已画好，叠上去反而穿帮） */
-const HIDDEN_IN_MAP: LayerKey[] = ['buildings', 'roads', 'water', 'pitches', 'trees', 'green', 'parking', 'lamps', 'boundary'];
+const HIDDEN_IN_MAP: LayerKey[] = []; // 俯视与三维共享同一地理数据，不叠加示意图瓦片。
 
 /** 简单点在多边形（射线法），map 模式地面点选建筑用。 */
 function pointInRing(x: number, z: number, ring: number[][]): boolean {
@@ -389,7 +396,7 @@ function pointInRing(x: number, z: number, ring: number[][]): boolean {
 
 /** 依据真实校园包围盒设定地面尺寸、雾、阴影范围与默认机位，避免手调机位跑偏 */
 function fitCampus(E: Engine, immediate: boolean) {
-  const mapMode = E.viewMode === 'map' && E.tiles.ready;
+  const mapMode = E.viewMode === 'map';
   const box = new THREE.Box3();
   for (const k of ['buildings', 'roads', 'water', 'pitches', 'green', 'parking', 'boundary'] as LayerKey[]) {
     if (E.groups[k].children.length) box.expandByObject(E.groups[k]);
@@ -444,11 +451,13 @@ function fitCampus(E: Engine, immediate: boolean) {
   const { dist, target } = fitDistance(box, dir, tanV, tanH);
   // 地图模式再拉近 8%：fitDistance 是"刚好装下"的距离，官方地图的观感更满一些
   // 三维孪生模式贴近一些（原来 1.04 太远，首屏核心区糊成一块）；地图模式保持官方观感
-  const pos = target.clone().add(dir.clone().multiplyScalar(dist * (mapMode ? 0.74 : 0.80)));
+  const pos = target.clone().add(dir.clone().multiplyScalar(dist * (mapMode ? 1.15 : 1.08)));
   E.home = { pos, target: target.clone() };
   E.controls.minDistance = 3;
   E.controls.maxDistance = dist * 2.6;
   if (immediate) {
+    // 异步数据到达后，取消仍指向启动占位中心的旧补间。
+    E.tween = null;
     // 分享链接给了机位就落位到它，别用自动取景覆盖（否则链接打开后视角会被重置）
     if (E.urlCam) {
       E.camera.position.copy(E.urlCam.pos);
@@ -538,7 +547,7 @@ function rebuildLabels(E: Engine, landmarks: Landmark[], layers: Record<LayerKey
       ? makeMapLabelSprite(l.name, CATEGORY_COLOR[l.category] ?? 0x4a90d9)
       : B.makeLabelSprite(l.name);
     const y = E.viewMode === 'map'
-      ? 0.9 + Math.min(2.0, B.visualHeight(l.height || 2) * 0.32)   // 贴着瓦片上画的建筑顶
+      ? B.visualHeight(l.height || 2) + 1.2   // 贴着瓦片上画的建筑顶
       : B.visualHeight(l.height || 2) + 1.2;
     const world = B.W(l.x, y, l.z);
     sprite.position.copy(world);
@@ -556,8 +565,8 @@ function rebuildLabels(E: Engine, landmarks: Landmark[], layers: Record<LayerKey
 function applyViewMode(E: Engine, mode: ViewMode, layers: Record<LayerKey, boolean>) {
   E.viewMode = mode;
   const map = mode === 'map';
-  if (E.tiles.ready) E.tiles.setMode(map);
-  E.ground.visible = !map || !E.tiles.ready;
+  E.tiles.setMode(false);
+  E.ground.visible = true;
   for (const k of HIDDEN_IN_MAP) E.groups[k].visible = map ? false : layers[k];
   // 相机约束：地图是平贴瓦片，压低最大俯角避免"纸片"感；孪生模式恢复自由
   E.controls.maxPolarAngle = map ? THREE.MathUtils.degToRad(76) : Math.PI / 2.05;
@@ -691,7 +700,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       raycaster: new THREE.Raycaster(), pointer: new THREE.Vector2(),
       landmarks: [], labelEntries: [], lastFeatures: null, lastDetail: null, focus: focusRef.current,
       urlCam: null,
-    fpYaw: 0, fpPitch: 0,
+    fpYaw: 0, fpPitch: 0, movementClear: () => false, shadowAt: 0,
       quality: 'high', autoQuality: true,
       detail: detailRef.current,
       kit: null, roadside: null, shared: null, budget: newBudget(), lodAcc: 0,
@@ -721,23 +730,20 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       tgt: () => engine.controls.target.toArray().map(n => +n.toFixed(2)),
       follow: () => engine.followId,
       fp: () => cb.current.firstPerson,
+      closeThird: () => cb.current.closeThird,
+      pedestrianCount: () => engine.scene.getObjectByName('campus-pedestrians')?.children.length ?? 0,
       dogState: () => engine.dogState,
       robots: () => Array.from(engine.robots.entries())
         .map(([id, r]) => [id, r.group.position.toArray().map(n => +n.toFixed(2))]),
       controls: () => engine.controls.enabled,
+      look: () => [engine.fpYaw, engine.fpPitch],
+      modelScale: () => B.DOG_SCALE,
     };
     scene.add(engine.tiles.group);
 
-    // ---- 官方瓦片：异步加载清单与网格，就绪后按当前模式挂载并触发一次取景
+    // 地理俯视不加载手绘瓦片：其示意坐标与 WGS84 校界不一致。
     let tilesAlive = true;
-    engine.tiles.load().then(() => {
-      if (!tilesAlive || !eng.current) return;
-      applyViewMode(engine, cb.current.viewMode, cb.current.layers);
-      setTilesReady((v) => v + 1);
-    }).catch((err) => {
-      // 清单拉不到（离线 / 未构建）时保持三维孪生视图可用
-      console.warn('[tiles] 官方瓦片清单加载失败，保持三维视图', err);
-    });
+
 
     // ---- 机器狗真模型：异步加载，完成后触发机器人重建（失败时自动回退程序化版本）
     let dogAlive = true;
@@ -763,7 +769,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     const onDown = (e: PointerEvent) => {
       downX = e.clientX; downY = e.clientY;
       // 第一人称：按住左键拖拽 = 转头（OrbitControls 在此时是关的，不会抢事件）
-      dragging = !!(cb.current.firstPerson && engine.followId);
+      dragging = e.button === 0 && !!((cb.current.firstPerson || cb.current.closeThird) && engine.followId);
+      if (dragging) renderer.domElement.setPointerCapture(e.pointerId);
     };
     const onMove = (e: PointerEvent) => {
       if (!dragging) return;
@@ -774,6 +781,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     const onUp = (e: PointerEvent) => {
       if (dragging) {
         dragging = false;
+        if (renderer.domElement.hasPointerCapture(e.pointerId)) renderer.domElement.releasePointerCapture(e.pointerId);
         return; // 转头结束不算点击
       }
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
@@ -825,6 +833,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     renderer.domElement.addEventListener('pointerdown', onDown);
     renderer.domElement.addEventListener('pointermove', onMove);
     renderer.domElement.addEventListener('pointerup', onUp);
+    const onCancel = () => { dragging = false; };
+    renderer.domElement.addEventListener('pointercancel', onCancel);
     // 用户接管视角时结束巡游
     const onUserInteract = () => {
       if (engine.tour?.active) {
@@ -834,7 +844,9 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     };
     controls.addEventListener('start', onUserInteract);
     const onKey = (e: KeyboardEvent) => {
-      if (!(cb.current.firstPerson && engine.followId)) return;
+      if (!((cb.current.firstPerson || cb.current.closeThird) && engine.followId)) return;
+      if ((e.target as HTMLElement)?.closest('input,textarea,select,[contenteditable=true]')) return;
+      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','r','R'].includes(e.key)) e.preventDefault();
       if (e.key === 'r' || e.key === 'R') { engine.fpYaw = 0; engine.fpPitch = 0; }
       if (e.key === 'ArrowLeft') engine.fpYaw += 0.12;
       if (e.key === 'ArrowRight') engine.fpYaw -= 0.12;
@@ -858,25 +870,35 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     const loop = () => {
       raf = requestAnimationFrame(loop);
       const nowT = performance.now() / 1000;
-      const dt = Math.min(0.1, Math.max(1e-4, nowT - prevT));
+      const elapsed = Math.max(1e-4, nowT - prevT);
+      const dt = Math.min(0.1, elapsed);
       prevT = nowT;
       const t = nowT;
       const E = engine;
 
       // 阴影隔帧重算：投影贴图是每帧最贵的一笔（全场景 casters 再走一遍深度），
       // 而场景里只有机器狗在动，隔帧更新肉眼看不出来，帧耗时能降一大截。
-      E.frameNo = (E.frameNo + 1) % 2;
-      if (E.frameNo === 0) E.renderer.shadowMap.needsUpdate = true;
+      // Buildings and sunlight are static. Keep their shadow map while flying home;
+      // only refresh moving robot shadows frequently in a close follow view.
+      if (!E.tween && t - E.shadowAt > (E.followId ? 0.2 : 2)) {
+        E.renderer.shadowMap.needsUpdate = true;
+        E.shadowAt = t;
+      }
 
       // 自动画质：每秒统计一次帧率，连续偏低就降档、持续富余就升档。
       // 需要连续多次才动作，避免建筑加载等瞬时卡顿把画质误杀到最低。
       // 切档后 6 秒内不再动作：切档本身要重建阴影图，来回切会更卡。
       if (E.autoQuality) {
-        if (E.qualHold > 0) E.qualHold = Math.max(0, E.qualHold - dt);
-        E.fpsAcc += dt; E.fpsFrames++;
+        if (E.qualHold > 0) E.qualHold = Math.max(0, E.qualHold - elapsed);
+        E.fpsAcc += elapsed; E.fpsFrames++;
         if (E.fpsAcc >= 1) {
           const fps = E.fpsFrames / E.fpsAcc;
           E.fpsAcc = 0; E.fpsFrames = 0;
+          // Adapt fill rate without changing materials/shader variants mid-flight.
+          const ratio = E.renderer.getPixelRatio();
+          const cap = E.quality === 'high' ? Math.min(window.devicePixelRatio, 2) : E.quality === 'low' ? 0.75 : 1;
+          if (fps < 25 && ratio > 0.5) E.renderer.setPixelRatio(Math.max(0.5, ratio * 0.75));
+          else if (fps > 55 && !E.followId && !E.tween && ratio < cap) E.renderer.setPixelRatio(Math.min(cap, ratio + 0.1));
           const i = QUALITY_ORDER.indexOf(E.quality);
           if (fps < 30) { E.lowStreak++; E.highStreak = 0; }
           else if (fps > 55) { E.highStreak++; E.lowStreak = 0; }
@@ -885,7 +907,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           else if (E.lowStreak >= 3 && i > 0) {
             applyQuality(E, QUALITY_ORDER[i - 1]); E.lowStreak = 0; E.qualHold = 6;
             cb.current.onQualityChange?.(QUALITY_ORDER[i - 1]);
-          } else if (E.highStreak >= 5 && i < QUALITY_ORDER.length - 1) {
+          } else if (E.highStreak >= 5 && !E.followId && !E.tween && i < QUALITY_ORDER.length - 1) {
             applyQuality(E, QUALITY_ORDER[i + 1]); E.highStreak = 0; E.qualHold = 6;
             cb.current.onQualityChange?.(QUALITY_ORDER[i + 1]);
           }
@@ -901,7 +923,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
 
       // 相机补间（第一人称接管相机时让位，否则会把相机拽回去）
       const fpActive = !!(cb.current.firstPerson && E.followId);
-      if (E.tween && !fpActive) {
+      if (E.tween && !E.followId) {
         const u = clamp01((t - E.tween.t0) / E.tween.dur);
         const e2 = ease(u);
         camera.position.lerpVectors(E.tween.fromPos, E.tween.toPos, e2);
@@ -944,7 +966,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
 
       // 机器人：平滑运动 + 步态 + 轨迹
       for (const rv of E.robots.values()) {
-        rv.cur.lerp(rv.target, 1 - Math.pow(0.0005, dt));
+        const next = advanceRobot(rv.cur, rv.motionQueue, 1 - Math.pow(0.0005, dt * Math.max(1, rv.motionQueue.length)), E.movementClear);
+        rv.cur.set(next.x, 0, next.z);
         const speed = rv.cur.distanceTo(rv.prev) / Math.max(dt, 1e-4);
         rv.prev.copy(rv.cur);
         rv.group.position.copy(rv.cur);
@@ -1035,9 +1058,10 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
             firstPerson = true;
             const yaw = baseYaw + E.fpYaw;
             tmp.set(0, 0, -1).applyAxisAngle(Y_AXIS, yaw).normalize();
-            const eye = pos.clone().addScaledVector(tmp, 0.3);
+            const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(Y_AXIS, baseYaw);
+            const eye = pos.clone().addScaledVector(forward, 0.22);
             // 眼高 0.3 单位 ≈ 3 m：狗模型缩到 0.42 后约 2.9 m 高，这个高度刚好在"头顶"
-            eye.y += 0.3;
+            eye.y += 0.24;
             // 离得远（刚进第一人称）直接吸附，慢机器上也不会"慢慢飘过去"
             const gapEye = camera.position.distanceTo(eye);
             camera.position.lerp(eye, gapEye > 2 ? 1 : 1 - Math.pow(1e-7, dt));
@@ -1049,12 +1073,13 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
             E.controls.enabled = false;
           } else {
             // 第三人称跟随：偏移量随狗模型一起缩小（原来按 7 m 高的狗定的 3.2/7.5）
-            tmp.set(0, 1.15, 2.7).applyAxisAngle(Y_AXIS, baseYaw);
+            tmp.set(0, cb.current.closeThird ? 0.65 + E.fpPitch * .5 : 1.15, cb.current.closeThird ? 1.2 : 2.7).applyAxisAngle(Y_AXIS, baseYaw + (cb.current.closeThird ? E.fpYaw : 0));
             const desired = pos.clone().add(tmp);
             // 距离太远（刚切进来/刚重建）直接吸附，否则缓动——避免和 controls.update() 拉锯导致永远跟不近
             const gap = camera.position.distanceTo(desired);
             camera.position.lerp(desired, gap > 6 ? 1 : 1 - Math.pow(0.002, dt));
             E.controls.target.lerp(pos.clone().add(new THREE.Vector3(0, 0.32, 0)), 1 - Math.pow(0.01, dt));
+            camera.lookAt(E.controls.target);
             E.controls.enabled = false;
           }
         } else E.controls.enabled = true;
@@ -1068,7 +1093,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         camera.fov = wantFov;
         camera.updateProjectionMatrix();
       }
-      if (!firstPerson) E.controls.update();
+      if (!E.followId && !E.tween) E.controls.update();
       updateLabels(E);
       renderer.render(scene, camera);
     };
@@ -1083,6 +1108,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       renderer.domElement.removeEventListener('pointerdown', onDown);
       renderer.domElement.removeEventListener('pointermove', onMove);
       renderer.domElement.removeEventListener('pointerup', onUp);
+      renderer.domElement.removeEventListener('pointercancel', onCancel);
       window.removeEventListener('keydown', onKey);
       controls.removeEventListener('start', onUserInteract);
       engine.dispose();
@@ -1118,6 +1144,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     // 所以守卫条件要把 detail 一起比，不能只比 features。
     if (E.lastFeatures === props.features && E.lastDetail === E.detail) return;
     E.lastFeatures = props.features;
+    E.movementClear = robotCollision(props.features);
     E.lastDetail = E.detail;
     // focusBox 是异步加载完 campus 才有的，engine 建立时捕获到的还是 null ——
     // 每次重建静态场景时同步一次，fitCampus 才能拿到收敛框
@@ -1187,6 +1214,14 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
 
   }, [props.features, props.landmarks, props.detail, treeReady]);
 
+  // 区域切换只更新取景，不重建几何。
+  useEffect(() => {
+    const E = eng.current;
+    if (!E || !props.focusBox) return;
+    E.focus = props.focusBox;
+    fitCampus(E, true);
+  }, [props.focusBox]);
+
   // ------------------------------------------------ 视图模式（官方地图 / 三维孪生）
   useEffect(() => {
     const E = eng.current;
@@ -1248,7 +1283,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     (E.scene.fog as THREE.Fog).color.set(c.fog);
     // 地图模式下瓦片自带白天光影，地面底色固定官方米色，仅对瓦片整体压色
     (E.ground.material as THREE.MeshStandardMaterial).color.set(
-      E.viewMode === 'map' ? MAP_BG : c.ground);
+      c.ground);
     E.tiles.setTint(c.mapTint);
     E.sun.color.set(c.sun.color);
     E.sun.intensity = c.sun.intensity;
@@ -1331,12 +1366,15 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         rv = {
           id: r.id, group: parts.group, parts, label, ring, trail, trailPts: [], lastTrail: cur.clone(),
           cur: cur.clone(), target: cur.clone(), prev: cur.clone(),
-          heading: -(r.heading || 0), targetHeading: -(r.heading || 0), routeLine,
+          heading: -(r.heading || 0), targetHeading: -(r.heading || 0), routeLine, motionQueue: [], labelText: `${r.id} · ${Math.round(r.battery)}%`,
           queueGroup: null, queuePins: [], queuePads: [], queueSig: '', queueIndex: 0,
           pathRibbon: null, pathSig: '',
         };
         E.robots.set(r.id, rv);
       }
+      const incoming = { x: r.x, z: r.z };
+      const last = rv.motionQueue[rv.motionQueue.length - 1] ?? rv.cur;
+      if (Math.hypot(last.x-r.x,last.z-r.z)>0.001 && rv.motionQueue.length<128) rv.motionQueue.push(incoming);
       rv.target.copy(B.W(r.x, 0, r.z));
       rv.targetHeading = -(r.heading || 0);
 
@@ -1422,11 +1460,15 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         }
       }
       // 标签与指示灯随状态刷新
-      const fresh = B.makeLabelSprite(`${r.id} · ${Math.round(r.battery)}%`, { small: true });
-      const oldMap = rv.label.material.map;
-      rv.label.material.map = fresh.material.map;
-      rv.label.material.needsUpdate = true;
-      oldMap?.dispose();
+      const labelText = `${r.id} · ${Math.round(r.battery)}%`;
+      if (rv.labelText !== labelText) {
+        rv.labelText = labelText;
+        const fresh = B.makeLabelSprite(labelText, { small: true });
+        const oldMap = rv.label.material.map;
+        rv.label.material.map = fresh.material.map;
+        oldMap?.dispose();
+        fresh.material.dispose(); // Sprite/material wrapper is temporary; texture is now owned by label.
+      }
       const eye = rv.parts.group.children.find(c => (c as THREE.Mesh).material &&
         ((c as THREE.Mesh).material as THREE.MeshStandardMaterial).emissive?.getHex() === 0x35e0ff) as THREE.Mesh | undefined;
       if (eye) {
@@ -1613,6 +1655,41 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
   }, [props.vrptwClock, props.routes]);
 
   // ------------------------------------------------ 对外 API
+  useEffect(() => {
+    const E = eng.current;
+    if (!E) return;
+    const group = new THREE.Group();
+    group.name = 'campus-pedestrians';
+    const palette = [0xf16b52, 0x448ed6, 0xe4b53c, 0x8b69bc, 0x37a486];
+    for (const p of props.pedestrians || []) {
+      const person = new THREE.Group();
+      person.position.copy(B.W(p.x, 0, p.z));
+      person.rotation.y = p.heading;
+      const skin = new THREE.MeshStandardMaterial({color:0xd9aa85});
+      const shirt = new THREE.MeshStandardMaterial({color:palette[p.color % palette.length]});
+      const pants = new THREE.MeshStandardMaterial({color:0x293747});
+      const part = (geo: THREE.BufferGeometry, mat: THREE.Material, x:number,y:number,z:number) => {
+        const mesh = new THREE.Mesh(geo,mat); mesh.position.set(x,y,z);mesh.castShadow=true;person.add(mesh);return mesh;
+      };
+      part(new THREE.SphereGeometry(.034,8,6),skin,0,.205,0);
+      part(new THREE.CylinderGeometry(.032,.027,.085,8),shirt,0,.135,0);
+      for(const side of [-1,1]) {
+        part(new THREE.CylinderGeometry(.012,.014,.09,6),pants,side*.018,.047,0);
+        const arm=part(new THREE.CylinderGeometry(.01,.01,.08,6),shirt,side*.047,.13,0);
+        arm.rotation.z=side*.12;
+      }
+      group.add(person);
+    }
+    E.scene.add(group);
+    E.renderer.shadowMap.needsUpdate = true;
+    return () => {
+      E.scene.remove(group);
+      const materials = new Set<THREE.Material>();
+      group.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose(); if(Array.isArray(o.material)) o.material.forEach(m=>materials.add(m));else materials.add(o.material);}});
+      materials.forEach(m=>m.dispose());
+    };
+  }, [props.pedestrians]);
+
   useImperativeHandle(ref, () => ({
     flyToLandmark(l, preset = 'overview') {
       const E = eng.current; if (!E) return;
@@ -1643,9 +1720,19 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     },
     resetView() {
       const E = eng.current; if (!E) return;
-      if (!E.home) fitCampus(E, false);
+      E.followId = null;
+      if (E.autoQuality) {
+        // The next frame exposes the whole campus. Reduce pixel work before that frame,
+        // then let the measured global frame rate gradually restore resolution.
+        E.renderer.setPixelRatio(Math.min(0.6, E.renderer.getPixelRatio()));
+        E.qualHold = 1; E.highStreak = 0;
+      }
+      E.controls.enabled = true;
+      E.fpYaw = 0; E.fpPitch = 0;
+      E.camera.fov = BASE_FOV; E.camera.updateProjectionMatrix();
+      fitCampus(E, false);
       E.tween = {
-        t0: performance.now() / 1000, dur: 1.6,
+        t0: performance.now() / 1000, dur: 0.65,
         fromPos: E.camera.position.clone(), toPos: E.home!.pos.clone(),
         fromTarget: E.controls.target.clone(), toTarget: E.home!.target.clone(),
       };
@@ -1726,7 +1813,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       ctx.font = `${fs}px sans-serif`;
       ctx.fillStyle = 'rgba(255,255,255,.78)';
       ctx.textAlign = 'right';
-      ctx.fillText('© 中国石油大学（北京）可视化位置服务平台 · © OpenStreetMap contributors · 石大·智巡', c.width - fs, c.height - fs * 0.8);
+      ctx.fillText('校园平面图近似重建 · © OpenStreetMap contributors · 石大·智巡', c.width - fs, c.height - fs * 0.8);
       const a = document.createElement('a');
       a.href = c.toDataURL('image/png');
       a.download = `cup-campus-${Date.now()}.png`;
@@ -1739,8 +1826,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       <div className="map-brand-chip"><span className="map-brand-mark">石</span><div><b>石大·云游校园</b><small>CHINA UNIVERSITY OF PETROLEUM · CAMPUS EXPLORER</small></div></div>
       <div className="map-compass"><b>N</b><span>▲</span></div>
       <div className="map-status"><span className="map-live-dot"/> 实时校园 · 昌平校区</div>
-      <div className="scene-hint">官方手绘底图 · 拖拽旋转 · 滚轮缩放 · 点击建筑或机器人</div>
-      <div className="map-attribution">© 中国石油大学（北京）可视化位置服务平台 · © OpenStreetMap contributors · ODbL</div>
+      <div className="scene-hint">{props.firstPerson ? '第一人称 · 按住左键拖动 / 方向键转头 · R 回正' : props.closeThird && props.followRobotId ? '近距离第三人称 · 左键拖动观察 · R 回正' : '地理布局 · 拖拽旋转 · 滚轮缩放 · 点击建筑或机器人'}</div>
+      <div className="map-attribution">校园平面图近似重建 · © OpenStreetMap contributors · ODbL</div>
     </div>
   );
 });

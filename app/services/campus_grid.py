@@ -13,10 +13,12 @@ import heapq
 import json
 import math
 import os
+from time import perf_counter
+from .avl import AVL, height
 from typing import Iterable, Sequence
 
 CELL = 0.4          # 1 格 = 0.4 单位 = 4 m
-INFLATE = 0.30      # 阻挡膨胀（不到 1 格，实测 1 格会把楼间步道焊死）
+INFLATE = 0.35      # 阻挡膨胀（不到 1 格，实测 1 格会把楼间步道焊死）
 MARGIN = 4.0        # 包围盒外扩（单位）
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -76,7 +78,28 @@ def _seg_dist(px, pz, ax, az, bx, bz) -> float:
     return math.hypot(px - (ax + t * dx), pz - (az + t * dz))
 
 
+def _segments_distance(ax, az, bx, bz, cx, cz, dx, dz):
+    def cross(px, pz, qx, qz, rx, rz):
+        return (qx-px)*(rz-pz)-(qz-pz)*(rx-px)
+    a, b = cross(ax,az,bx,bz,cx,cz), cross(ax,az,bx,bz,dx,dz)
+    c, d = cross(cx,cz,dx,dz,ax,az), cross(cx,cz,dx,dz,bx,bz)
+    if a*b < 0 and c*d < 0:
+        return 0.0
+    return min(_seg_dist(ax,az,cx,cz,dx,dz), _seg_dist(bx,bz,cx,cz,dx,dz),
+               _seg_dist(cx,cz,ax,az,bx,bz), _seg_dist(dx,dz,ax,az,bx,bz))
+
+
+class PlanningBudgetExceeded(Exception):
+    pass
+
+
 class CampusGrid:
+    PLAN_SECONDS = 0.5
+
+    def _check_budget(self):
+        if perf_counter() >= self._deadline:
+            raise PlanningBudgetExceeded
+
     def __init__(self, extra_points: Iterable[tuple[float, float]] = (), path: str = DATA):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -108,17 +131,17 @@ class CampusGrid:
         for ring in rings:
             rx = [p[0] for p in ring]
             rz = [p[1] for p in ring]
-            i0 = max(0, int((min(rx) - self.x0) / CELL))
-            i1 = min(self.w - 1, int((max(rx) - self.x0) / CELL) + 1)
-            j0 = max(0, int((min(rz) - self.z0) / CELL))
-            j1 = min(self.h - 1, int((max(rz) - self.z0) / CELL) + 1)
+            i0 = max(0, int((min(rx) - INFLATE - self.x0) / CELL))
+            i1 = min(self.w - 1, int((max(rx) + INFLATE - self.x0) / CELL) + 1)
+            j0 = max(0, int((min(rz) - INFLATE - self.z0) / CELL))
+            j1 = min(self.h - 1, int((max(rz) + INFLATE - self.z0) / CELL) + 1)
             for j in range(j0, j1 + 1):
                 cz = self.z0 + (j + 0.5) * CELL
                 for i in range(i0, i1 + 1):
                     if blocked[j * self.w + i]:
                         continue
                     cx = self.x0 + (i + 0.5) * CELL
-                    if _inside(cx, cz, ring):
+                    if _inside(cx, cz, ring) or any(_seg_dist(cx,cz,*ring[k-1],*ring[k]) <= INFLATE for k in range(len(ring))):
                         blocked[j * self.w + i] = 1
 
         # 2) 膨胀：到楼边距离小于 INFLATE 的格子也算阻挡
@@ -144,11 +167,74 @@ class CampusGrid:
                     grown[j * self.w + i] = 1
 
         self.blocked = grown
+        self.revision = 0
+        self.obstacles = {}
+        self.nodes = AVL()
+        self.last_plan = {}
+        self._searches = {}
+        self._search_revision = 0
         self._rings = rings
         self._bboxes = [
             (min(p[0] for p in r), min(p[1] for p in r), max(p[0] for p in r), max(p[1] for p in r))
             for r in rings
         ]
+
+    def node(self, index):
+        """Lazy AVL records store traversable cell adjacency and distance costs."""
+        record = self.nodes.get(index)
+        if record is not None:
+            return record
+        j, i = divmod(index, self.w)
+        edges = []
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                ni, nj = i + di, j + dj
+                if not (di or dj) or not (0 <= ni < self.w and 0 <= nj < self.h):
+                    continue
+                nxt = nj * self.w + ni
+                if self.blocked[nxt] or (di and dj and (self.blocked[j*self.w+ni] or self.blocked[nj*self.w+i])):
+                    continue
+                edges.append((nxt, math.hypot(di, dj)))
+        record = {"x": self.to_world(i,j)[0], "z": self.to_world(i,j)[1], "edges": edges}
+        self.nodes.put(index, record)
+        return record
+
+    def dynamic_clear(self, ax, az, bx, bz):
+        for o in self.obstacles.values():
+            radius = o['radius'] + INFLATE
+            if o['x'] < min(ax,bx)-radius or o['x'] > max(ax,bx)+radius or o['z'] < min(az,bz)-radius or o['z'] > max(az,bz)+radius:
+                continue
+            if _seg_dist(o['x'],o['z'],ax,az,bx,bz) <= radius:
+                return False
+        return True
+
+    def set_obstacle(self, obstacle):
+        self.obstacles[obstacle['id']] = obstacle
+        self.revision += 1
+
+    def remove_obstacle(self, oid):
+        del self.obstacles[oid]
+        self.revision += 1
+
+    def plan(self, start, goal):
+        began = perf_counter()
+        self._deadline = began + self.PLAN_SECONDS
+        reason = 'unreachable'
+        try:
+            if not self.dynamic_clear(*start, *start) or not self.dynamic_clear(*goal, *goal):
+                result = []
+                reason = 'endpoint_blocked'
+            else:
+                result = self._plan(start, goal)
+                if result:
+                    reason = 'ok'
+        except PlanningBudgetExceeded:
+            result = []
+            reason = 'budget_exceeded'
+        self.last_plan = {"milliseconds": round((perf_counter()-began)*1000, 3),
+                          "reachable": bool(result), "reason": reason,
+                          "waypoints": len(result), "revision": self.revision}
+        return result
 
     # ---------------------------------------------------------------- 基础查询
     def to_cell(self, x: float, z: float) -> tuple[int, int]:
@@ -165,12 +251,20 @@ class CampusGrid:
 
     def near_building(self, x: float, z: float) -> bool:
         """点是否落在（或贴住）任意楼里——用来断言"没穿墙"。"""
+        return not self.segment_clear(x, z, x, z)
+
+    def segment_clear(self, ax, az, bx, bz):
+        """Swept disk against exact building edges, including narrow walls missed by the grid."""
+        if not self.dynamic_clear(ax, az, bx, bz):
+            return False
         for ring, bb in zip(self._rings, self._bboxes):
-            if x < bb[0] or x > bb[2] or z < bb[1] or z > bb[3]:
+            if max(ax,bx)+INFLATE < bb[0] or min(ax,bx)-INFLATE > bb[2] or max(az,bz)+INFLATE < bb[1] or min(az,bz)-INFLATE > bb[3]:
                 continue
-            if _inside(x, z, ring):
-                return True
-        return False
+            if _inside(ax,az,ring) or _inside(bx,bz,ring): return False
+            for k in range(len(ring)):
+                if _segments_distance(ax,az,bx,bz,*ring[k-1],*ring[k]) <= INFLATE:
+                    return False
+        return True
 
     def nearest_free(self, x: float, z: float, radius: float = 6.0) -> tuple[float, float]:
         """吸附到最近的可行格。楼体较大时（质心离墙 30 m 以上）用放射状兜底。"""
@@ -285,7 +379,7 @@ class CampusGrid:
             for k in (0, 20, -20, 40, -40, 60, -60, 80, -80, 100, -100, 120, -120):
                 a = base + math.radians(k)
                 nx, nz = x + math.cos(a) * st, z + math.sin(a) * st
-                if self.near_building(nx, nz):
+                if not self.segment_clear(x, z, nx, nz):
                     continue
                 d = (gx - nx) ** 2 + (gz - nz) ** 2
                 if d < bestd:
@@ -295,39 +389,45 @@ class CampusGrid:
         return (x, z)
 
     def line_clear(self, ax: float, az: float, bx: float, bz: float, step: float = 0.1) -> bool:
-        n = max(1, int(math.hypot(bx - ax, bz - az) / step))
-        for k in range(n + 1):
-            t = k / n
-            if self.is_blocked(ax + (bx - ax) * t, az + (bz - az) * t):
-                return False
-        return True
+        return self.segment_clear(ax, az, bx, bz)
 
     # ---------------------------------------------------------------- A*
-    def plan(self, start: tuple[float, float], goal: tuple[float, float]) -> list[tuple[float, float]]:
+    def _plan(self, start: tuple[float, float], goal: tuple[float, float]) -> list[tuple[float, float]]:
         """返回从 start 到 goal 的世界坐标折线（不含 start，含 goal）。"""
         sx, sz = self.free_spot(*start)
         gx, gz = self.free_spot(*goal)
+        self._check_budget()
         if self.line_clear(sx, sz, gx, gz):
             return [(gx, gz)]
 
         si, sj = self.to_cell(sx, sz)
         gi, gj = self.to_cell(gx, gz)
+        if not (0 <= si < self.w and 0 <= gi < self.w and 0 <= sj < self.h and 0 <= gj < self.h):
+            return []
+        if not self.dynamic_clear(*self.to_world(gi,gj), *self.to_world(gi,gj)):
+            return []
         if self.blocked[sj * self.w + si] or self.blocked[gj * self.w + gi]:
-            return [(gx, gz)]
+            return []
 
         W, H, blocked = self.w, self.h, self.blocked
         start_idx = sj * W + si
         goal_idx = gj * W + gi
         if start_idx == goal_idx:
-            return [(gx, gz)]
+            return [(gx, gz)] if self.line_clear(sx,sz,gx,gz) else []
 
-        openq: list[tuple[float, int]] = [(0.0, start_idx)]
-        gscore = {start_idx: 0.0}
-        came: dict[int, int] = {}
-        seen = set()
+        # Resume bounded A* for the same stationary start, goal and obstacle version.
+        if self._search_revision != self.revision:
+            self._searches.clear()
+            self._search_revision = self.revision
+        search_key = (sx, sz, gx, gz)
+        if search_key not in self._searches:
+            if len(self._searches) >= 8:
+                self._searches.pop(next(iter(self._searches)))
+            self._searches[search_key] = ([(0.0, start_idx)], {start_idx: 0.0}, {}, set())
+        openq, gscore, came, seen = self._searches[search_key]
         found = False
-        sqrt2 = math.sqrt(2.0)
         while openq:
+            self._check_budget()
             _, cur = heapq.heappop(openq)
             if cur in seen:
                 continue
@@ -336,48 +436,41 @@ class CampusGrid:
                 found = True
                 break
             cj, ci = divmod(cur, W)
-            for dj in (-1, 0, 1):
-                nj = cj + dj
-                if nj < 0 or nj >= H:
+            for nxt, cost in self.node(cur)['edges']:
+                if nxt in seen:
                     continue
-                for di in (-1, 0, 1):
-                    if di == 0 and dj == 0:
-                        continue
-                    ni = ci + di
-                    if ni < 0 or ni >= W:
-                        continue
-                    nxt = nj * W + ni
-                    if blocked[nxt] or nxt in seen:
-                        continue
-                    # 斜向不许贴着墙角切过去
-                    if di and dj and (blocked[cj * W + ni] or blocked[nj * W + ci]):
-                        continue
-                    step = sqrt2 if (di and dj) else 1.0
-                    ng = gscore[cur] + step
-                    if ng < gscore.get(nxt, 1e18):
-                        gscore[nxt] = ng
-                        came[nxt] = cur
-                        hh = math.hypot(ni - gi, nj - gj)
-                        heapq.heappush(openq, (ng + hh, nxt))
+                nj, ni = divmod(nxt, W)
+                if not self.segment_clear(*self.to_world(ci,cj), *self.to_world(ni,nj)):
+                    continue
+                ng = gscore[cur] + cost
+                if ng < gscore.get(nxt, 1e18):
+                    gscore[nxt] = ng
+                    came[nxt] = cur
+                    heapq.heappush(openq, (ng + math.hypot(ni-gi,nj-gj), nxt))
+        self._searches.pop(search_key, None)
         if not found:
-            return [(gx, gz)]
+            return []
 
         cells = [goal_idx]
         while cells[-1] != start_idx:
             cells.append(came[cells[-1]])
         cells.reverse()
-        pts = [self.to_world(idx % W, idx // W) for idx in cells]
+        pts = [(sx,sz)] + [self.to_world(idx % W, idx // W) for idx in cells] + [(gx,gz)]
+        if any(not self.line_clear(*a,*b) for a,b in zip(pts,pts[1:])):
+            return []
 
         # 拉绳：能直视就跳过中间点，避免锯齿
         out: list[tuple[float, float]] = []
         i = 0
         while i < len(pts) - 1:
+            self._check_budget()
             j = len(pts) - 1
             while j > i + 1 and not self.line_clear(*pts[i], *pts[j]):
+                self._check_budget()
                 j -= 1
             out.append(pts[j])
             i = j
-        out[-1] = (gx, gz)
+        # Endpoints were included before smoothing; never replace a checked segment.
         return out
 
     def path_length(self, pts: Sequence[tuple[float, float]], start: tuple[float, float]) -> float:

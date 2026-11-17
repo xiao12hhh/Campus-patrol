@@ -92,7 +92,7 @@ function patches(ctx: CanvasRenderingContext2D, size: number, seed: number, n = 
     const cx = r() * size, cy = r() * size, rr = size * (0.06 + r() * 0.16);
     const dark = r() > 0.5;
     const grad = ctx.createRadialGradient(cx, cy, rr * 0.2, cx, cy, rr);
-    grad.addColorStop(0, dark ? 'rgba(38,42,48,.5)' : 'rgba(150,158,166,.26)');
+    grad.addColorStop(0, dark ? 'rgba(38,42,48,.08)' : 'rgba(150,158,166,.06)');
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = grad;
     ctx.beginPath();

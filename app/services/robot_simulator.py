@@ -1,11 +1,9 @@
 """四足机器人巡检仿真服务。
 
-坐标单位与 public/data/campus-local.json（v3）一致：1 单位 = 10 米，
+坐标单位与 public/data/campus-local.json（v4）一致：1 单位 = 10 米，
 **x 向东、z 向南**（原点 40.2159,116.2449）。
 
-路点取自 v3 真实地标质心：主校区建筑来自学校官方 3D 源（map.cup.edu.cn），
-东校区来自 OSM。旧版路点是 v2/OSM 时代的坐标，其中「第三教学楼」用的正是
-后来被删除的那栋错位楼位置，所以在 v3 场景下会飘到错误的地方。
+路点按名称从当前地理布局读取，地图重建后不保留旧示意图坐标。
 
 状态机：待命 -> 巡检中 -> (到点) 检测中 -> 巡检中 -> ... 电量低 -> 返航 -> 充电中 -> 巡检中
 事件流：检测中按概率生成巡检告警，随 WebSocket 推送并保留最近 60 条历史。
@@ -14,47 +12,24 @@ import asyncio
 import math
 import random
 import uuid
+from time import monotonic
 from datetime import datetime, timezone
 
-from .campus_grid import CampusGrid
+from .campus_grid import CampusGrid, _seg_dist
 
-# ------------------------------------------------------------------ 巡检路线
-# 路点取自 v3 真实地标质心（主校区为官方 3D 源，东校区为 OSM）。
-ROUTES: dict[str, list[dict]] = {
-    "北校区教学区环线": [
-        {"x": -46.75, "z": -11.44, "name": "中油大厦A座"},
-        {"x": -44.46, "z": -7.23, "name": "第三教学楼"},
-        {"x": -40.68, "z": -3.68, "name": "地质楼"},
-        {"x": -36.83, "z": -3.17, "name": "第四教学楼"},
-        {"x": -37.90, "z": -5.43, "name": "南校区北门"},
-        {"x": -33.98, "z": -11.18, "name": "游泳馆"},
-        {"x": -25.15, "z": -14.28, "name": "图书馆"},
-        {"x": -31.45, "z": -15.62, "name": "国际交流中心"},
-    ],
-    "体育设施线": [
-        {"x": -49.72, "z": -17.66, "name": "网球场"},
-        {"x": -41.30, "z": -15.06, "name": "看台"},
-        {"x": -39.20, "z": -13.28, "name": "红旗操场"},
-        {"x": -35.50, "z": -10.54, "name": "健身房"},
-        {"x": -33.45, "z": -13.65, "name": "体育馆"},
-        {"x": -33.98, "z": -11.18, "name": "游泳馆"},
-    ],
-    "东校区生活区线": [
-        {"x": 24.80, "z": 2.36, "name": "1号楼"},
-        {"x": 24.33, "z": 7.35, "name": "3号楼"},
-        {"x": 24.40, "z": 12.08, "name": "5号楼"},
-        {"x": 34.15, "z": 11.80, "name": "6号楼"},
-        {"x": 33.91, "z": 7.11, "name": "4号楼"},
-        {"x": 33.21, "z": 1.54, "name": "2号楼"},
-        {"x": 34.95, "z": 22.60, "name": "实验楼"},
-        {"x": 18.41, "z": 24.77, "name": "主教"},
-    ],
+# 巡检站点随地图版本解析，禁止继续使用手绘地图里的硬编码坐标。
+from .campus_data import places_by_name
+_places = places_by_name()
+_ROUTE_NAMES = {
+    "北校区教学区环线": ["主楼A座", "主楼B座", "图书馆", "第二教学楼", "国际交流中心"],
+    "体育设施线": ["网球场", "红旗操场", "体育馆", "游泳馆"],
+    "东校区生活区线": ["1号楼", "3号楼", "5号楼", "6号楼", "4号楼", "2号楼", "实验楼", "主教"],
 }
-
-# 充电桩放在开阔场地上（南广场是 pedestrian 铺装面；东校区取生活区东侧空地）
+ROUTES = {name: [dict(_places[n]) for n in names if n in _places] for name, names in _ROUTE_NAMES.items()}
+_south_gate = _places["南门"]
 DOCKS = [
-    {"x": -29.50, "z": -1.42, "name": "南广场充电桩"},
-    {"x": 28.00, "z": 6.00, "name": "东校区充电桩"},
+    {"x": _south_gate["x"] + 1.5, "z": _south_gate["z"] - 1.5, "name": "南门充电桩"},
+    {"x": 28.0, "z": 6.0, "name": "东校区充电桩"},
 ]
 
 # ------------------------------------------------------------------ 避障栅格
@@ -108,6 +83,11 @@ ROBOTS: list[dict] = [
         "queue": [], "queue_index": 0, "path": [],
     },
 ]
+
+# 初始位置与巡检线路一致；实际行走由 CampusGrid 推离楼体并避障。
+for _robot, _route in zip(ROBOTS, ROUTES.values()):
+    if _route:
+        _robot.update(x=_route[0]["x"], z=_route[0]["z"])
 
 EVENTS: list[dict] = []
 
@@ -186,6 +166,7 @@ class RobotSimulator:
         robot = next((r for r in ROBOTS if r["id"] == robot_id), None)
         if robot is None:
             return None
+        robot["cooperative"] = False
         clean: list[dict] = []
         for item in waypoints:
             try:
@@ -246,6 +227,7 @@ class RobotSimulator:
         while self.running:
             for robot in ROBOTS:
                 self._tick(robot)
+                await asyncio.sleep(0)  # Let pending API requests run between bounded plans.
             if self.clients:
                 await self._broadcast()
             await asyncio.sleep(1)
@@ -264,6 +246,9 @@ class RobotSimulator:
     def _advance(self, robot: dict) -> None:
         """到达并检视完一站后推进指针；队列走完就清空并回到默认环线。"""
         queue = robot.get("queue") or []
+        if queue and robot.get("cooperative"):
+            robot["queue_index"] = (robot.get("queue_index", 0) + 1) % len(queue)
+            return
         if queue:
             robot["queue_index"] = robot.get("queue_index", 0) + 1
             robot["progress"] = round(min(1.0, robot["queue_index"] / len(queue)), 3)
@@ -331,17 +316,26 @@ class RobotSimulator:
         """
         rid = robot["id"]
         grid = campus_grid()
-        key = (round(target["x"], 2), round(target["z"], 2))
+        key = (round(target["x"], 2), round(target["z"], 2), grid.revision if grid else -1)
+        if robot.get('plan_stats', {}).get('reason') == 'budget_exceeded' and monotonic() >= robot.get('_retry_at', 0):
+            self._path_key.pop(rid, None)
         if self._path_key.get(rid) != key:
             pts = grid.plan((robot["x"], robot["z"]), (target["x"], target["z"])) if grid else []
+            robot["plan_stats"] = dict(grid.last_plan) if grid else {}
+            robot["_retry_at"] = monotonic() + 1
+            robot["navigation_blocked"] = not bool(pts)
             self._path[rid] = [list(p) for p in pts]
             self._path_key[rid] = key
             self._stuck[rid] = 0
             self._recover[rid] = 0
+        if robot.get("navigation_blocked"):
+            robot["speed"] = 0.0
+            robot["path"] = []
+            return False
         path = self._path.get(rid) or []
         while path:
             # 最后一个点是吸附到楼边上的点，贴墙时进不到 0.18，放宽到 0.45
-            tol = 0.45 if len(path) == 1 else 0.18
+            tol = 0.01
             if math.hypot(path[0][0] - robot["x"], path[0][1] - robot["z"]) < tol:
                 path.pop(0)
             else:
@@ -354,6 +348,8 @@ class RobotSimulator:
 
         bx, bz = robot["x"], robot["z"]
         self._move_toward(robot, {"x": path[0][0], "z": path[0][1]})
+        if robot.get("yielding_to"):
+            return False
         if math.hypot(robot["x"] - bx, robot["z"] - bz) >= self.STUCK_EPS:
             self._stuck[rid] = 0
             return False
@@ -403,12 +399,21 @@ class RobotSimulator:
         grid = campus_grid()
         if grid is not None:
             # 撞楼就沿墙滑行（不是停住），保证"遇到楼改变方向"永远有解
-            robot["x"], robot["z"] = grid.step_free(robot["x"], robot["z"], target["x"], target["z"], step)
+            nx, nz = grid.step_free(robot["x"], robot["z"], target["x"], target["z"], step)
+            robot["yielding_to"] = None
+            for other in ROBOTS:
+                if other['id'] == robot['id']:
+                    continue
+                if _seg_dist(other['x'], other['z'], robot['x'], robot['z'], nx, nz) < 0.7:
+                    robot['yielding_to'] = other['id']
+                    robot['speed'] = 0.0
+                    return
+            robot["x"], robot["z"] = nx, nz
         else:
-            robot["x"] += dx / dist * step
-            robot["z"] += dz / dist * step
+            robot["speed"] = 0.0
+            return
         robot["x"], robot["z"] = round(robot["x"], 3), round(robot["z"], 3)
-        robot["speed"] = round(step, 2)
+        robot["speed"] = round(math.hypot(robot["x"] - (target["x"]-dx), robot["z"] - (target["z"]-dz)), 3)
         robot["heading"] = math.atan2(dx, dz)  # 绕 y 轴，北为 0
 
     @staticmethod
@@ -424,7 +429,7 @@ class RobotSimulator:
                     await client.send_json({
                         "type": "robot_state",
                         "timestamp": stamp,
-                        **{k: (round(v, 2) if isinstance(v, float) else v) for k, v in robot.items()},
+                        **{k: (round(v, 3 if k in ("x", "z") else 2) if isinstance(v, float) else v) for k, v in robot.items()},
                     })
                 if EVENTS:
                     await client.send_json({"type": "robot_event", **EVENTS[-1]})

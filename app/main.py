@@ -3,24 +3,32 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api import campus, robots, vrptw
+from app.api import campus, robots, vrptw, navigation
 from app.services.robot_simulator import simulator
+from app.services.runtime_version import PROJECT_ROOT, RUNTIME_VERSION
 
 app = FastAPI(title='石大·智巡 API', version='0.2.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 app.include_router(campus.router)
 app.include_router(robots.router)
 app.include_router(vrptw.router)
+app.include_router(navigation.router)
 
 
 @app.on_event('startup')
 async def startup():
+    from app.services.pedestrians import populate
+    from app.services.robot_simulator import campus_grid, ROBOTS
+    grid = campus_grid()
+    if grid is not None:
+        populate(grid, ROBOTS)
     asyncio.create_task(simulator.loop())
 
 
 @app.get('/health')
 def health():
-    return {'status': 'ok', 'service': 'cup-campus-twin'}
+    return {'status': 'ok', 'service': 'cup-campus-twin',
+            'project_root': str(PROJECT_ROOT), 'backend_version': RUNTIME_VERSION}
 
 
 @app.get('/')

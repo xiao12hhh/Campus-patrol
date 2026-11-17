@@ -10,12 +10,11 @@ import { FACADE_TILE } from './detailcfg';
 
 export const W = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
-// 建筑高度：v3 起校内 84 栋楼用的是学校官方 3D 源的**实测高度**（米 → 单位，1 单位 = 10 m），
+// 建筑高度：v3 起校内 84 栋楼用的是学校官方 3D 源的高度字段（米 → 单位，1 单位 = 10 m），
 // 按真高渲染即可，不再做夸张放大（旧版 2.2 倍是为弥补 OSM 缺失 height 标签的估算值）。
 // 仅保留极小的下限，避免 1 层门房这类 4 m 建筑退化成薄片。
-// 视觉高度压缩：按真实高度渲染时楼群显得过于拥挤（俯视下楼的体量把间距吃光），
-// 官方手绘瓦片里楼高也是被压缩的（约为真实感的 0.5~0.6）。0.65 兼顾辨识度与疏朗。
-export const HEIGHT_SCALE = 0.8;
+// 统一使用源数据高度，保持建筑与道路的相同比例。
+export const HEIGHT_SCALE = 1;
 const HEIGHT_MIN = 0.35;
 export const visualHeight = (h: number) => Math.max(HEIGHT_MIN, (h || 0.4) * HEIGHT_SCALE);
 
@@ -36,19 +35,25 @@ export function makeFacade(seed: number): FacadeSet {
   const rnd = mulberry32(seed * 977 + 13);
   // 分格参数与 roofkit 共用同一份：roofkit 靠它们反算 UV，
   // 让「窗行数 = 官方 levels」，两边必须一致。
-  const cols = FACADE_TILE.cols, rows = FACADE_TILE.rows, size = 256;
-  const make = (draw: (ctx: CanvasRenderingContext2D, win: number, wy: number, wx: number, ww: number, wh: number) => void) => {
+  const cols = FACADE_TILE.cols, rows = FACADE_TILE.rows, size = 512;
+  const palette = [
+    { wall: '#e4e1d8', glass: '#59717a', width: .58, height: .56 },
+    { wall: '#dfd4c2', glass: '#64747b', width: .48, height: .58 },
+    { wall: '#dedfd9', glass: '#4e6a77', width: .68, height: .65 },
+    { wall: '#d5dad7', glass: '#617880', width: .62, height: .56 },
+  ][seed % 4];
+  const make = (draw: (ctx: CanvasRenderingContext2D, win: number, wy: number, wx: number, ww: number, wh: number) => void, emissive = false) => {
     const c = document.createElement('canvas'); c.width = c.height = size;
     const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#e9ece8'; ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = emissive ? '#000000' : palette.wall; ctx.fillRect(0, 0, size, size);
     // 每层的水平腰线 / 窗台：立面近景层次靠这条线，比纯色块耐看
-    const mx = size / cols / 5, my = size / rows / 4;
+    const mx = size / cols * (1 - palette.width) / 2, my = size / rows * (1 - palette.height) / 2;
     const ww = size / cols - mx * 2, wh = size / rows - my * 2;
     for (let r = 0; r < rows; r++) {
       for (let i = 0; i < cols; i++) {
         draw(ctx, r * cols + i, my + r * size / rows, mx + i * size / cols, ww, wh);
       }
-      ctx.fillStyle = 'rgba(116,128,128,.38)';
+      ctx.fillStyle = emissive ? '#000000' : 'rgba(116,128,128,.18)';
       ctx.fillRect(0, Math.round(r * size / rows), size, 2);
     }
     const t = new THREE.CanvasTexture(c);
@@ -59,15 +64,15 @@ export function makeFacade(seed: number): FacadeSet {
   };
   const lit = new Array(cols * rows).fill(0).map(() => rnd() < 0.52);
   const map = make((ctx, _w, wy, wx, ww, wh) => {
-    ctx.fillStyle = '#254b5b'; ctx.fillRect(wx, wy, ww, wh);
+    ctx.fillStyle = palette.glass; ctx.fillRect(wx, wy, ww, wh);
     ctx.fillStyle = 'rgba(184,222,230,.28)'; ctx.fillRect(wx, wy, ww, wh * 0.3);
     // 窗框竖挺 + 窗台阴影
     ctx.fillStyle = 'rgba(225,234,233,.7)'; ctx.fillRect(wx + ww * 0.46, wy, Math.max(1, ww * 0.065), wh);
     ctx.fillStyle = 'rgba(16,42,52,.42)'; ctx.fillRect(wx, wy + wh, ww, Math.max(1, wh * 0.12));
   });
   const emissiveMap = make((ctx, win, wy, wx, ww, wh) => {
-    ctx.fillStyle = lit[win] ? '#ffc98a' : '#0a0c10'; ctx.fillRect(wx, wy, ww, wh);
-  });
+    ctx.fillStyle = lit[win] ? '#ffc98a' : '#000000'; ctx.fillRect(wx, wy, ww, wh);
+  }, true);
   return { map, emissiveMap };
 }
 
@@ -150,7 +155,7 @@ export function buildWaterAndPitches(features: LocalFeature[]) {
       // 判定顺序：stadium（有标签）→ 有 sport 的球场 → 大面积无名场地按田径场
       // （红旗操场 area≈33；stadium 112/71、足球场 78、网球场 25 都有各自标签先行分流）
       const big = areaOfPoly(ring) > 25;
-      const isTrack = big || /操场|田径场/.test(f.name);
+      const isTrack = (!p.sport && big) || /操场|田径场/.test(f.name);
       let cx = 0, cz = 0;
       for (const q of ring) { cx += q[0]; cz += q[1]; }
       cx /= ring.length; cz /= ring.length;
@@ -396,7 +401,7 @@ const DOG_LEGS = ['FL', 'FR', 'HL', 'HR'];
 
 /** 机器狗模型整体缩放：模型是按「看得见」放大做的，缩到 0.42 后约 2.9 m 高，
  *  与 20~40 m 的教学楼放在一起比例不刺眼；第一人称的相机高度也按这个缩放取值。 */
-export const DOG_SCALE = 0.42;
+export const DOG_SCALE = 0.32;
 
 export interface DogProto {
   geos: THREE.BufferGeometry[];
@@ -481,7 +486,7 @@ export async function loadDogProto(base = '/models/unitree_b2'): Promise<DogProt
 
 /** 用 GLB 组装机器人。proto 为 null 时回退到程序化版本。 */
 export function makeQuadruped(proto: DogProto | null, color: number): QuadrupedParts {
-  if (!proto) return makeQuadrupedFallback(color);
+  if (!proto) { const parts = makeQuadrupedFallback(color); parts.group.scale.setScalar(0.32); return parts; }
 
   const group = new THREE.Group();
   // 模型导出后头朝 +Z，而场景约定（与 heading = atan2 一致）为头朝 -Z，这里整体掉头

@@ -21,14 +21,14 @@ import {
 // ---------------------------------------------------------------- 体块尺寸基准
 const PLINTH_H = M(1.2);        // 基座高
 const PLINTH_OUT = M(0.22);     // 基座外扩
-const CORNICE_T = M(1.1);       // 檐口带厚
-const EAVE_OUT = M(0.55);       // 挑檐外挑
+const CORNICE_T = M(0.45);       // 檐口带厚
+const EAVE_OUT = M(0.25);       // 挑檐外挑
 const DRIP_GAP = M(0.06);       // 檐口内侧滴水缝（顺带避免与立面共面导致 z-fighting）
 const PARAPET_T = M(0.30);      // 女儿墙厚
 const PARAPET_H = M(0.90);      // 女儿墙高
 const PARAPET_OUT = M(0.03);    // 女儿墙外侧比立面外扩，同样为避开共面
 const PARAPET_SINK = M(0.05);   // 往下埋进屋面的深度，用来藏掉底面
-const COPING_OUT = M(0.18);     // 压顶出挑
+const COPING_OUT = M(0.10);     // 压顶出挑
 const COPING_T = M(0.12);       // 压顶厚
 const EQUIP_MARGIN = M(0.45);   // 设备离女儿墙内侧最小净距
 
@@ -54,25 +54,6 @@ function normalizeRing(ring: number[][]): number[][] {
     if (a[0] === b[0] && a[1] === b[1]) r.pop();
   }
   return r;
-}
-
-/**
- * 渲染用的轮廓内缩 —— 只影响画出来的体块，数据里的真实坐标与质心一律不动。
- * 真实校园里两栋楼之间至少有 8~20 m 的道路或绿化，但把每栋楼按原始轮廓画满、
- * 再叠上挑檐和基座外扩，缝就被吃掉，整片建筑看起来糊成一团（"太挤"）。
- * 这里统一收 BREATH_IN，让楼群之间透出缝，相对位置反而更容易读。
- */
-const BREATH_IN = M(1.2);   // 每边内缩 1.2 m，两栋楼之间因此多出 2.4 m
-function breathRing(ring: number[][]): number[][] {
-  const a0 = Math.abs(signedArea(ring));
-  if (!a0) return ring;
-  for (const k of [1, 0.62, 0.35]) {
-    const out = offsetRing(ring, -BREATH_IN * k);
-    const a1 = Math.abs(signedArea(out));
-    // 缩得太多（细长条/小体量会退化）就退回上一档；只要确实缩了一点就采用
-    if (a1 > a0 * 0.55 && a1 < a0 * 0.995) return out;
-  }
-  return ring;
 }
 
 /**
@@ -124,17 +105,13 @@ export function pointInRing(x: number, z: number, ring: number[][]): boolean {
 export function offsetRing(ring: number[][], d: number): number[][] {
   const r = normalizeRing(ring);
   if (r.length < 3 || Math.abs(d) < 1e-9) return r;
-  let cx = 0, cz = 0;
-  for (const p of r) { cx += p[0]; cz += p[1]; }
-  cx /= r.length; cz /= r.length;
+  // 凹轮廓的均值可能位于建筑外；内外方向必须由环绕序确定。
+  const winding = Math.sign(signedArea(r)) || 1;
 
   const outward = (ax: number, az: number, bx: number, bz: number): THREE.Vector2 => {
     const dx = bx - ax, dz = bz - az;
     const l = Math.hypot(dx, dz) || 1;
-    const n = new THREE.Vector2(dz / l, -dx / l);
-    const mx = (ax + bx) / 2, mz = (az + bz) / 2;
-    if (n.x * (mx - cx) + n.y * (mz - cz) < 0) n.set(-n.x, -n.y);
-    return n;
+    return new THREE.Vector2(winding * dz / l, -winding * dx / l);
   };
 
   const out: number[][] = [];
@@ -203,15 +180,19 @@ function planarUV(g: THREE.BufferGeometry, scale: number) {
 
 /**
  * 按真实层数重排立面 UV。
- * ExtrudeGeometry 给侧墙的 uv.y = 1 - z_local，故 z_local = 1 - uv.y 就是挤出方向的高度。
- * 把 v 改成 (z_local - z0) * kv 后，`levels` 行窗正好铺满 [z0, z0+span]，窗行数与楼层一一对应。
+ * 在世界坐标中将墙面切向距离映射到 u，高度映射到 v。
+ * kv 由有效立面高度和楼层数决定，不得再被通用平面 UV 覆盖。
  */
-function retileWall(g: THREE.BufferGeometry, kv: number, z0: number) {
-  const side = g.groups.find(x => x.materialIndex === 1);
-  if (!side) return;
+export function retileWall(g: THREE.BufferGeometry, kv: number, z0: number) {
+  const pos = g.getAttribute('position') as THREE.BufferAttribute;
+  const normal = g.getAttribute('normal') as THREE.BufferAttribute;
   const uv = g.getAttribute('uv') as THREE.BufferAttribute;
-  for (let i = side.start; i < side.start + side.count; i++) {
-    uv.setY(i, (1 - uv.getY(i) - z0) * kv);
+  for (let i = 0; i < pos.count; i++) {
+    const nx = normal.getX(i), nz = normal.getZ(i);
+    const len = Math.hypot(nx, nz) || 1;
+    // 沿墙切线投影，斜墙也保持相同窗宽；v 按楼层数铺满有效立面。
+    uv.setXY(i, (-nz * pos.getX(i) + nx * pos.getZ(i)) / len,
+      (pos.getY(i) - z0) * kv);
   }
   uv.needsUpdate = true;
 }
@@ -490,7 +471,6 @@ export function buildBuildingsDetailed(
   const wallUnits: Inst[] = [];
   const pipeUnits: Inst[] = [];
 
-  let fi = 0;
   for (const f of features) {
     if (f.kind !== 'building') continue;
     const rings = ringsOfBuilding(f);
@@ -500,15 +480,15 @@ export function buildBuildingsDetailed(
     const outside = f.in_campus === false;
     const cat = categoryOf(f);
     const base = new THREE.Color(outside ? 0x9aa0a8 : CATEGORY_COLOR[cat]);
-    const facade = facades[fi++ % facades.length];
+    const facadeIndex = cat === 'dorm' ? 1 : cat === 'library' || cat === 'office' ? 2 : cat === 'lab' ? 3 : 0;
+    const facade = facades[facadeIndex % facades.length];
 
     for (const rawRing of rings) {
-      // 视觉上把每栋楼收 1.2 m，让楼群看起来不再粘连（数据坐标不动）
-      const ring = breathRing(normalizeRing(rawRing));
-      if (ring.length < 4) continue;
-      // OSM 源（东校区等）没有实测高度，普遍矮一截；保底 1.2（12 m）避免"扁线框"
-      const h = p.source === 'map.cup.edu.cn' ? visualHeight(f.height)
-        : Math.max(1.2, visualHeight(f.height));
+      // 保留源轮廓；渲染不得为了疏朗而移动真实建筑边界。
+      const ring = normalizeRing(rawRing);
+      if (ring.length < 3) continue;
+      // 有高度就尊重数据；门房不能因来源变更被强行抬到 12 m。
+      const h = visualHeight(f.height > 0 ? f.height : 1.2);
       bboxAdd(bboxes, ring);
 
       // ---- 校外背景楼：保持原来的简单盒子，不做体块、不放设备
@@ -546,11 +526,10 @@ export function buildBuildingsDetailed(
       const bodyGeo = slab(ring, 0, h);
       const span = Math.max(h * 0.3, tWall - plinthH);
       const kv = levels / (FACADE_TILE.rows * FACADE_TILE.ry * span);
-      retileWall(bodyGeo, kv, plinthH);
       const feltGeo = sliceGroup(bodyGeo, 0);
       const wallGeo = sliceGroup(bodyGeo, 1);
       planarUV(feltGeo, 2.5);
-      planarUV(wallGeo, 2.5);
+      retileWall(wallGeo, kv, plinthH);
 
       const wall = new THREE.MeshStandardMaterial({
         color: base.clone().multiplyScalar(0.92),
@@ -602,7 +581,7 @@ export function buildBuildingsDetailed(
       // 棱线：只取主体挤出体，保留「相邻建筑边界分明」的效果
       const eg = new THREE.EdgesGeometry(bodyGeo, 25);
       const arr = eg.attributes.position.array as ArrayLike<number>;
-      for (let i = 0; i < arr.length; i += 3) edgePos.push(arr[i], arr[i + 2], -arr[i + 1]);
+      for (let i = 0; i < arr.length; i += 3) edgePos.push(arr[i], arr[i + 1], arr[i + 2]);
       eg.dispose();
       bodyGeo.dispose();
 
@@ -621,7 +600,7 @@ export function buildBuildingsDetailed(
     const eg = new THREE.BufferGeometry();
     eg.setAttribute('position', new THREE.Float32BufferAttribute(edgePos, 3));
     group.add(new THREE.LineSegments(eg, new THREE.LineBasicMaterial({
-      color: 0x39424d, transparent: true, opacity: 0.45, depthWrite: false,
+      color: 0x65716f, transparent: true, opacity: 0.18, depthWrite: false,
     })));
     opts.budget.drawCalls += 1;
   }

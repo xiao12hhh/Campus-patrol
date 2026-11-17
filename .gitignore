@@ -20,6 +20,8 @@ tools/_probe_out/
 /_*.log
 /_*.err
 /_*.png
+/backend.stdout.log
+/backend.stderr.log
 
 # 智能体工作区状态
 .workbuddy/

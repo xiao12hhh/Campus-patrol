@@ -7,7 +7,7 @@
 #
 # 双击 start.bat 也能启动（等价于不带参数的本脚本）。
 
-param([switch]$Dev)
+param([switch]$Dev, [switch]$NoBrowser)
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -62,18 +62,36 @@ if (-not $Dev) {
     }
 }
 
-# ---------------------------------------------------------------- 3) 端口已在监听就直接用
+# ---------------------------------------------------------------- 3) 识别同项目服务，代码变更时重启
+$expectedVersion = (& $py -c 'from app.services.runtime_version import RUNTIME_VERSION; print(RUNTIME_VERSION)').Trim()
 $occupied = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+$reuseBackend = $false
 if ($occupied) {
-    Write-Host "`n端口 $port 已有服务在跑（PID $($occupied.OwningProcess)），直接打开浏览器。" -ForegroundColor Yellow
-    Start-Process "http://127.0.0.1:$port"
-    exit 0
+    try { $health = Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 5 }
+    catch { throw "端口 $port 被未知服务占用，未停止该服务。" }
+    if ($health.service -ne 'cup-campus-twin' -or $health.project_root -ne $root) {
+        throw "端口 $port 的服务无法确认为当前项目（也可能是旧启动器启动的服务）。请关闭旧校园巡视后端窗口再运行，未停止未知进程。"
+    }
+    if ($health.backend_version -eq $expectedVersion) {
+        Write-Host '当前项目后端版本一致，复用服务。' -ForegroundColor Green
+        $reuseBackend = $true
+    } else {
+        Write-Section '检测到后端更新，重启当前项目服务'
+        foreach ($processId in ($occupied.OwningProcess | Select-Object -Unique)) {
+            Stop-Process -Id $processId -Force
+        }
+        for ($i = 0; $i -lt 20; $i++) {
+            if (-not (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) { break }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }
 
 # ---------------------------------------------------------------- 4) 启动后端
 Write-Section "启动后端 (端口 $port)"
-Start-Process powershell -ArgumentList '-NoExit', '-Command',
-    "& '$py' -m uvicorn app.main:app --host 0.0.0.0 --port $port" -WorkingDirectory $root
+if (-not $reuseBackend) {
+    Start-Process -FilePath $py -ArgumentList '-m', 'uvicorn', 'app.main:app', '--host', '0.0.0.0', '--port', "$port" -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput (Join-Path $root 'backend.stdout.log') -RedirectStandardError (Join-Path $root 'backend.stderr.log')
+}
 
 # 等端口就绪
 $ok = $false
@@ -82,7 +100,7 @@ for ($i = 0; $i -lt 40; $i++) {
     if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) { $ok = $true; break }
 }
 if (-not $ok) {
-    Write-Host "端口 $port 一直没起来，请看刚弹出的那个窗口里的报错。" -ForegroundColor Red
+    Write-Host "端口 $port 一直没起来，请查看 backend.stderr.log 中的报错。" -ForegroundColor Red
     exit 1
 }
 
@@ -97,7 +115,7 @@ if ($Dev) {
     foreach ($c in $nodeCands) { if (Test-Path $c) { $node = $c; break } }
     if (-not $node) { $cmd = Get-Command node -ErrorAction SilentlyContinue; if ($cmd) { $node = $cmd.Source } }
     if ($node) {
-        Start-Process powershell -ArgumentList '-NoExit', '-Command',
+        Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoExit', '-Command',
             "& '$node' '$root/node_modules/vite/bin/vite.js' --host 0.0.0.0" -WorkingDirectory $root
         for ($i = 0; $i -lt 40; $i++) {
             Start-Sleep -Milliseconds 500
@@ -110,4 +128,4 @@ if ($Dev) {
 }
 
 Write-Host "`n启动完成，正在打开 $url" -ForegroundColor Green
-Start-Process $url
+if (-not $NoBrowser) { Start-Process $url }

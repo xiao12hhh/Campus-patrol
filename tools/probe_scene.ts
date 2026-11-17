@@ -1,12 +1,13 @@
+import { robotCollision, advanceRobot } from '../frontend/src/lib/robotMotion';
 // 离线校验：在 Node 里跑一遍新的程序化场景构建，
 // 核对性能预算，并逐台复核屋顶设备确实落在屋面安全环内（不穿女儿墙、不越屋面）。
 import * as THREE from 'three';
 import { readFileSync } from 'node:fs';
 import { LocalFeature } from '../frontend/src/lib/campus';
-import { buildBuildingsDetailed, SIZE_OF, safeRoofRing, distToRing, pointInRing } from '../frontend/src/components/scene/roofkit';
+import { buildBuildingsDetailed, SIZE_OF, safeRoofRing, distToRing, pointInRing, offsetRing } from '../frontend/src/components/scene/roofkit';
 import { buildRoadsPaved, buildRoadside, buildGroundCoverPaved } from '../frontend/src/components/scene/paving';
 import { makeFacade } from '../frontend/src/components/scene/builders';
-import { DETAIL_PRESETS, newBudget, DetailLevel } from '../frontend/src/components/scene/detailcfg';
+import { DETAIL_PRESETS, newBudget, DetailLevel, FACADE_TILE } from '../frontend/src/components/scene/detailcfg';
 
 // ---- canvas 桩：场景里的贴图都是 canvas 画的，Node 里给个空壳即可
 const noop = () => { };
@@ -120,10 +121,11 @@ function run(level: DetailLevel) {
 }
 
 const std = run('standard');
-run('lean');
-run('rich');
+const lean = run('lean');
+const rich = run('rich');
 
-const okGood = std.bad === 0 && std.outside === 0 && std.nanUv === 0;
+const okGood = [std, lean, rich].every(r => r.bad === 0 && r.outside === 0 && r.nanUv === 0);
+if (!okGood) process.exitCode = 1;
 console.log(`\n结论: ${okGood ? 'PASS' : 'FAIL'}`);
 
 // ---- 追加：道路/绿地 merge 诊断（排查"路不渲染"） ----
@@ -138,4 +140,56 @@ console.log(`\n结论: ${okGood ? 'PASS' : 'FAIL'}`);
   });
   const gc = buildGroundCoverPaved(features, budget);
   console.log('[ground] green children =', gc.green.children.length, 'parking =', gc.parking.children.length);
+}
+
+// 回归：源轮廓、世界坐标边线、官方楼层数不得被视觉处理改变。
+{
+  const assert = (ok: boolean, why: string) => { if (!ok) throw new Error(why); };
+  const ring = [[10,20],[14,20],[14,23],[10,23],[10,20]];
+  const sample: LocalFeature = { id: 'regression', name: '教学楼', kind: 'building',
+    height: 2.4, in_campus: true, geometry: { type: 'Polygon', coordinates: [ring] },
+    properties: { source: 'map.cup.edu.cn', levels: '6', building: 'teaching' } };
+  const result = buildBuildingsDetailed([sample], [makeFacade(0)], [], {detail:'lean', budget:newBudget()});
+  const mesh = result.group.children.find(o => (o as THREE.Mesh).isMesh) as THREE.Mesh;
+  const g = mesh.geometry, pos = g.getAttribute('position'), uv = g.getAttribute('uv');
+  const side = g.groups[1];
+  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity, minV=Infinity, maxV=-Infinity;
+  for(let i=side.start;i<side.start+side.count;i++) {
+    minX=Math.min(minX,pos.getX(i)); maxX=Math.max(maxX,pos.getX(i));
+    minY=Math.min(minY,pos.getY(i)); maxY=Math.max(maxY,pos.getY(i));
+    minV=Math.min(minV,uv.getY(i)); maxV=Math.max(maxV,uv.getY(i));
+  }
+  assert(Math.abs(minX-10)<1e-5 && Math.abs(maxX-14)<1e-5, '建筑轮廓被缩放');
+  assert(Math.abs(maxY-2.4)<1e-5, '建筑高度被压缩');
+  // 可见立面在基座和檐口之间，六层窗必须精确铺满此范围。
+  const visibleSpan = 2.4 - .045 - .12 * 1.2;
+  const windowRows = (maxV-minV)/(maxY-minY)*visibleSpan*FACADE_TILE.ry*FACADE_TILE.rows;
+  assert(Math.abs(windowRows-6)<1e-5, '窗格 UV 不符合六层楼高');
+  const lines = result.group.children.find(o => (o as THREE.LineSegments).isLineSegments) as THREE.LineSegments;
+  lines.geometry.computeBoundingBox();
+  const box = lines.geometry.boundingBox!;
+  assert(Math.abs(box.min.z-20)<1e-5 && Math.abs(box.max.z-23)<1e-5 && Math.abs(box.max.y-2.4)<1e-5,
+    '边线重复旋转，脱离建筑');
+  const concave = [[0,0],[4,0],[4,1],[1,1],[1,4],[0,4]];
+  for (const input of [concave, [...concave].reverse()]) {
+    const inset=offsetRing(input,-.1);
+    assert(inset.every(p => pointInRing(p[0],p[1],concave)), '凹轮廓内缩方向错误');
+  }
+  console.log('[regression] footprint / height / six floors / edges / concave winding PASS');
+}
+
+{
+  const feature: LocalFeature = {id:'wall',kind:'building',name:'wall',height:1,properties:{},
+    geometry:{type:'Polygon',coordinates:[[[0,-4],[.05,-4],[.05,4],[0,4],[0,-4]]]}};
+  const clear=robotCollision([feature]);
+  if(clear({x:-1,z:0},{x:1,z:0})) throw new Error('Renderer interpolates through thin wall');
+  const queue=[{x:-1,z:5},{x:1,z:5},{x:1,z:0}];
+  let point={x:-1,z:0};
+  for(let i=0;i<1000 && queue.length;i++) {
+    const next=advanceRobot(point,queue,.3,clear);
+    if(!clear(point,next)) throw new Error('Renderer cuts across patrol corner');
+    point=next;
+  }
+  if(queue.length || Math.hypot(point.x-1,point.z)>0.001) throw new Error('Telemetry queue stalled');
+  console.log('[robot-motion] thin walls / ordered corner interpolation PASS');
 }

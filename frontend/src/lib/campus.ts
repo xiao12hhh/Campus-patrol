@@ -163,6 +163,8 @@ export function categoryOf(f: LocalFeature): LandmarkCategory {
     if (bt === 'student_bedroom' || bt === 'residential') return 'dorm';
     if (bt === 'experiment_building') return 'lab';
     if (bt === 'canteen') return 'service';
+    if (bt === 'hospital' || bt === 'service_building') return /活动中心/.test(name) ? 'activity' : 'service';
+    if (bt === 'teaching') return 'teaching';
     if (/图书馆/.test(name)) return 'library';
     if (/教学楼|逸夫|阶教/.test(name)) return 'teaching';
     if (/号楼|公寓|宿舍/.test(name)) return 'dorm';
@@ -211,6 +213,7 @@ export function toLandmarks(features: LocalFeature[]): Landmark[] {
   for (const f of features) {
     // 地标只收录校内要素，校外建筑属于城市背景
     if (f.in_campus === false) continue;
+    if (f.kind === 'road' || f.kind === 'barrier' || f.kind === 'green') continue;
     if (f.kind === 'building' && !f.name) continue;
     const p = f.properties || {};
     let name = displayName(f.name || '');
