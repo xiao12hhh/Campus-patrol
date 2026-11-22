@@ -136,6 +136,8 @@ class RobotSimulator:
     EVENT_CHANCE = 0.22
 
     def __init__(self) -> None:
+        self.reset_epoch = 0
+        self.people_moving = False
         self.demo_mode = False
         self.clients: set = set()
         self.running = False
@@ -226,6 +228,17 @@ class RobotSimulator:
     async def loop(self) -> None:
         self.running = True
         while self.running:
+            if self.people_moving:
+                from .pedestrians import move_people
+                grid = campus_grid()
+                if grid and move_people(grid, ROBOTS):
+                    # Keep an existing plan when every remaining segment is still safe.
+                    for r in ROBOTS:
+                        path=self._path.get(r['id'], [])
+                        key=self._path_key.get(r['id'])
+                        points=[(r['x'],r['z'])]+path
+                        if key and path and all(grid.segment_clear(*a,*b) for a,b in zip(points,points[1:])):
+                            self._path_key[r['id']]=(*key[:2],grid.revision)
             for robot in ROBOTS:
                 self._tick(robot)
                 await asyncio.sleep(0)  # Let pending API requests run between bounded plans.

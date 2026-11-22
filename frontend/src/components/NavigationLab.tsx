@@ -4,7 +4,7 @@ import { CampusData } from '../lib/campus';
 
 type Obstacle = { id: string; x: number; z: number; radius: number; kind: string };
 type Bot = { comparison?: {before:number[][];after:number[][];revision:number}; id: string; x: number; z: number; path: number[][]; queue: {x:number;z:number;name:string}[]; cooperative: boolean; yielding_to: string; navigation_blocked: boolean; plan_stats?: {milliseconds:number;revision:number;reason?:string} };
-type State = { demo_mode:boolean; revision: number; index: { nodes: number; height: number }; obstacles: Obstacle[]; robots: Bot[] };
+type State = { people_moving:boolean; demo_mode:boolean; revision: number; index: { nodes: number; height: number }; obstacles: Obstacle[]; robots: Bot[] };
 const colors = ['#18b8a6', '#f7ad42', '#8285ff'];
 
 export default function NavigationLab({campus}: {campus: CampusData | null}) {
@@ -74,13 +74,14 @@ export default function NavigationLab({campus}: {campus: CampusData | null}) {
       <label>半径（米） <input aria-label="障碍半径米" type="number" min="2" max="100" value={radius*10} style={{width:60}} onChange={e=>setRadius(Number(e.target.value)/10)} /></label>
       <button disabled={busy || !point} onClick={()=>void act('/obstacles','POST',{...point,radius,kind})}>添加障碍并重规划</button>
       <button disabled={busy} onClick={()=>void act('/pedestrians','POST',{count:36})}>重新随机生成行人</button>
+      <button disabled={busy} onClick={()=>void act('/pedestrians/motion','POST',{enabled:!data?.people_moving})}>{data?.people_moving ? '暂停行人走动' : '开启行人走动'}</button>
       <button disabled={busy} onClick={()=>void act('/pedestrians','POST',{count:0})}>清空行人</button>
       <button disabled={busy || !data} onClick={()=>void act('/allocate','POST')}>分配三机巡检子区</button>
     </div>
     <p>橙色虚线：绕行前 · 彩色实线：绕行后（保留最近一次同目标重规划）</p>
     {point && <small>已选位置：x {point.x}，z {point.z}</small>}
     {error && <p role="alert" style={{color:'#e75b5b'}}>{error}</p>}
-    <p>校园行人：{data?.obstacles.filter(o=>o.kind==='行人').length ?? 0} 人 · 随机站立，参与避障</p>
+    <p>校园行人：{data?.obstacles.filter(o=>o.kind==='行人').length ?? 0} 人 · {data?.people_moving ? '缓慢行走，遇障转向' : '站立观察'}，参与避障</p>
     {data?.obstacles.filter(o=>o.kind!=='行人').map(o=><div key={o.id} style={{marginTop:8}}>{o.kind} · 半径 {o.radius*10} 米 <button disabled={busy} onClick={()=>void act(`/obstacles/${o.id}`,'DELETE')}>移除 / 恢复通行</button></div>)}
     {data?.robots.map((r,i)=><p key={r.id} style={{borderLeft:`3px solid ${colors[i]}`,paddingLeft:8}}>
       <b>{r.id}</b> · {r.cooperative ? `${r.queue.length} 站分区循环` : '常规巡检'}<br/>

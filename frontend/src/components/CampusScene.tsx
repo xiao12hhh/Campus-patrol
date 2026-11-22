@@ -1,3 +1,4 @@
+import {solveLeg, footCycle} from '../lib/legIK';
 import { robotCollision, advanceRobot, motionHeading, travelPhase, Point } from '../lib/robotMotion';
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import * as THREE from 'three';
@@ -181,6 +182,7 @@ interface RobotVis {
   heading: number; targetHeading: number;
   routeLine: THREE.Line | null;
   motionQueue: Point[];
+  motionEpoch?: number;
   renderSpeed: number; gaitPhase: number; gaitAmplitude: number;
   labelText: string;
   pathRibbon: THREE.Mesh | null;
@@ -738,6 +740,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         .map(([id, r]) => [id, r.group.position.toArray().map(n => +n.toFixed(2))]),
       controls: () => engine.controls.enabled,
       look: () => [engine.fpYaw, engine.fpPitch],
+      feet: () => Array.from(engine.robots.values()).flatMap(r=>{r.group.updateMatrixWorld(true);return r.parts.legs.map(l=>l.knee.localToWorld((l.hip.userData.foot as THREE.Vector3).clone()).y);}),
+      pedestrianPositions: () => engine.scene.getObjectByName('campus-pedestrians')?.children.map(p=>[p.position.x,p.position.z]),
       modelScale: () => B.DOG_SCALE,
     };
     scene.add(engine.tiles.group);
@@ -965,6 +969,20 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         }
       }
 
+      const people=E.scene.getObjectByName('campus-pedestrians');
+      people?.children.forEach(person=>{
+        const target=person.userData.target as THREE.Vector3;
+        const before=person.position.clone();
+        const distance=person.position.distanceTo(target);
+        if(distance>1e-5) {const next=person.position.clone().lerp(target,Math.min(1,.08*dt/distance));if(E.movementClear(person.position,next))person.position.copy(next);}
+        const moved=person.position.distanceTo(before);
+        person.userData.phase=(person.userData.phase || 0)+moved*65;
+        const walking=moved>1e-6;
+        const limbs=person.userData.limbs as THREE.Object3D[];
+        limbs?.forEach((limb,i)=>{const desired=walking ? Math.sin(person.userData.phase+ROBOT_PHASES[i])*.35 : 0;limb.rotation.x+=(desired-limb.rotation.x)*(1-Math.exp(-10*dt));});
+        const delta=person.userData.heading-person.rotation.y;
+        person.rotation.y+=Math.atan2(Math.sin(delta),Math.cos(delta))*(1-Math.exp(-5*dt));
+      });
       // 机器人：平滑运动 + 步态 + 轨迹
       for (const rv of E.robots.values()) {
         // Replay the server's 1 Hz samples at near-constant speed, retaining every corner.
@@ -986,12 +1004,20 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         rv.gaitPhase=travelPhase(rv.gaitPhase,travel);
         rv.gaitAmplitude += (clamp01(speed/.25)-rv.gaitAmplitude)*(1-Math.exp(-12*dt));
         const amp=rv.gaitAmplitude;
-        const gait = rv.parts.body.userData.gait || GAIT_FALLBACK;
+
+        rv.group.updateMatrixWorld(true);
         rv.parts.legs.forEach((leg, i) => {
-          const phase=rv.gaitPhase+ROBOT_PHASES[i];
-          const swing=Math.sin(phase);
-          leg.hip.rotation.x = gait.hip * amp * swing;
-          leg.knee.rotation.x = gait.knee * amp * Math.max(0,Math.sin(phase+Math.PI/2));
+          const foot=leg.hip.userData.foot as THREE.Vector3 | undefined;
+          if(!foot) return;
+          const cycle=footCycle(rv.gaitPhase+ROBOT_PHASES[i]);
+          const scale=leg.hip.getWorldScale(new THREE.Vector3()).y;
+          // Ground target accounts for the imported hip height and model scale.
+          const hipY=leg.hip.getWorldPosition(new THREE.Vector3()).y;
+          const target={y:(.012-hipY)/scale + cycle.lift*.055/scale*amp,
+            z:leg.knee.position.z+foot.z+cycle.stride*.12/scale*amp*leg.hip.userData.direction};
+          const angles=solveLeg(leg.knee.position,foot,target);
+          leg.hip.rotation.x=angles.hip;
+          leg.knee.rotation.x=angles.knee;
         });
         const baseY = (rv.parts.body.userData.baseY as number) ?? 0.72;
         rv.parts.body.position.y = baseY + .022*amp*Math.sin(2*rv.gaitPhase);
@@ -1381,6 +1407,14 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         };
         E.robots.set(r.id, rv);
       }
+      const epoch=(r as Robot & {motion_epoch?:number}).motion_epoch ?? 0;
+      if(rv.motionEpoch !== undefined && rv.motionEpoch !== epoch) {
+        rv.motionQueue.length=0;
+        rv.cur.set(r.x,0,r.z);rv.prev.copy(rv.cur);rv.group.position.copy(rv.cur);
+        rv.heading=(r.heading||0)+Math.PI;rv.renderSpeed=0;rv.gaitAmplitude=0;
+        rv.trailPts=[];rv.lastTrail.copy(rv.cur);rv.trail.geometry.setDrawRange(0,0);
+      }
+      rv.motionEpoch=epoch;
       const incoming = { x: r.x, z: r.z };
       const last = rv.motionQueue[rv.motionQueue.length - 1] ?? rv.cur;
       if (Math.hypot(last.x-r.x,last.z-r.z)>0.001 && rv.motionQueue.length<128) rv.motionQueue.push(incoming);
@@ -1667,36 +1701,33 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
   useEffect(() => {
     const E = eng.current;
     if (!E) return;
-    const group = new THREE.Group();
-    group.name = 'campus-pedestrians';
-    const palette = [0xf16b52, 0x448ed6, 0xe4b53c, 0x8b69bc, 0x37a486];
-    for (const p of props.pedestrians || []) {
-      const person = new THREE.Group();
-      person.position.copy(B.W(p.x, 0, p.z));
-      person.rotation.y = p.heading;
-      const skin = new THREE.MeshStandardMaterial({color:0xd9aa85});
-      const shirt = new THREE.MeshStandardMaterial({color:palette[p.color % palette.length]});
-      const pants = new THREE.MeshStandardMaterial({color:0x293747});
-      const part = (geo: THREE.BufferGeometry, mat: THREE.Material, x:number,y:number,z:number) => {
-        const mesh = new THREE.Mesh(geo,mat); mesh.position.set(x,y,z);mesh.castShadow=true;person.add(mesh);return mesh;
-      };
-      part(new THREE.SphereGeometry(.034,8,6),skin,0,.205,0);
-      part(new THREE.CylinderGeometry(.032,.027,.085,8),shirt,0,.135,0);
-      for(const side of [-1,1]) {
-        part(new THREE.CylinderGeometry(.012,.014,.09,6),pants,side*.018,.047,0);
-        const arm=part(new THREE.CylinderGeometry(.01,.01,.08,6),shirt,side*.047,.13,0);
-        arm.rotation.z=side*.12;
+    let group=E.scene.getObjectByName('campus-pedestrians') as THREE.Group | undefined;
+    if(!group){group=new THREE.Group();group.name='campus-pedestrians';E.scene.add(group);}
+    const ids=new Set((props.pedestrians||[]).map(p=>p.id));
+    for(const child of [...group.children]) if(!ids.has(child.name)){group.remove(child);disposeDeep(child);}
+    const palette=[0xf16b52,0x448ed6,0xe4b53c,0x8b69bc,0x37a486];
+    for(const p of props.pedestrians||[]) {
+      let person=group.getObjectByName(p.id) as THREE.Group | undefined;
+      if(!person){
+        person=new THREE.Group();person.name=p.id;person.position.set(p.x,0,p.z);group.add(person);
+        const skin=new THREE.MeshStandardMaterial({color:0xd9aa85});
+        const shirt=new THREE.MeshStandardMaterial({color:palette[p.color%palette.length]});
+        const pants=new THREE.MeshStandardMaterial({color:0x293747});
+        const head=new THREE.Mesh(new THREE.SphereGeometry(.034,8,6),skin);head.position.y=.205;person.add(head);
+        const body=new THREE.Mesh(new THREE.CylinderGeometry(.032,.027,.085,8),shirt);body.position.y=.135;person.add(body);
+        const limbs:THREE.Group[]=[];
+        for(const side of [-1,1]) for(const arm of [false,true]) {
+          const pivot=new THREE.Group();pivot.position.set(side*(arm ? .047 : .018),arm ? .16 : .095,0);
+          const mesh=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,arm ? .075 : .09,6),arm?shirt:pants);
+          mesh.position.y=arm ? -.0375 : -.045;pivot.add(mesh);person.add(pivot);limbs.push(pivot);
+        }
+        person.userData.limbs=limbs;
+        person.traverse(o=>{if(o instanceof THREE.Mesh)o.castShadow=true;});
       }
-      group.add(person);
+      person.userData.target=new THREE.Vector3(p.x,0,p.z);
+      person.userData.heading=p.heading;
     }
-    E.scene.add(group);
-    E.renderer.shadowMap.needsUpdate = true;
-    return () => {
-      E.scene.remove(group);
-      const materials = new Set<THREE.Material>();
-      group.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose(); if(Array.isArray(o.material)) o.material.forEach(m=>materials.add(m));else materials.add(o.material);}});
-      materials.forEach(m=>m.dispose());
-    };
+    E.renderer.shadowMap.needsUpdate=true;
   }, [props.pedestrians]);
 
   useImperativeHandle(ref, () => ({

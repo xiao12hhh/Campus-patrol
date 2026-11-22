@@ -72,6 +72,13 @@ async def main():
             await asyncio.sleep(3)
             assert not await evaluate("document.body.innerText.includes('移除 / 恢复通行')"), 'Obstacle removal failed'
             assert await evaluate("window.__scene_debug.pedestrianCount()===36"), 'People missing from 3D scene'
+            before_people=await evaluate("window.__scene_debug.pedestrianPositions()")
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='开启行人走动').click()")
+            await asyncio.sleep(5)
+            after_people=await evaluate("window.__scene_debug.pedestrianPositions()")
+            assert before_people != after_people, 'Pedestrians do not move visually'
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='暂停行人走动').click()")
+
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='近距离第三人称').click()")
             await asyncio.sleep(3)
             assert await evaluate("window.__scene_debug.closeThird() && !window.__scene_debug.fp() && window.__scene_debug.follow()!==null && !window.__scene_debug.controls()"), 'Close third-person not active'
@@ -81,6 +88,9 @@ async def main():
             await command('Input.dispatchMouseEvent',dict(type='mouseReleased',button='left',clickCount=1,x=bounds['x']+80,y=bounds['y']))
             assert await evaluate("Math.abs(window.__scene_debug.look()[0])>.1"), 'Third person drag failed'
             await asyncio.sleep(1)
+            feet=await evaluate("window.__scene_debug.feet()")
+            print('FOOT HEIGHTS', feet, flush=True)
+            assert all(y > -.025 and y < .2 for y in feet), 'Feet penetrate ground or float too high'
             close_shot=await command('Page.captureScreenshot',dict(format='png'))
             (ROOT/'_shots'/'close-third-person.png').write_bytes(base64.b64decode(close_shot['data']))
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='回到全景').click()")
@@ -100,6 +110,16 @@ async def main():
             assert await evaluate("!!document.querySelector('polyline[stroke-dasharray]')"), 'Before-route overlay missing'
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='开始演示').click()")
             await asyncio.sleep(2)
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='近距离第三人称').click()")
+            positions_before=await evaluate("window.__scene_debug.robots()")
+            lifted=False
+            for _ in range(15):
+                await asyncio.sleep(.15)
+                feet=await evaluate("window.__scene_debug.feet()")
+                assert min(feet)>-.025
+                lifted = lifted or max(feet)>.025
+            assert lifted, 'Walking feet never lift'
+            assert positions_before != await evaluate("window.__scene_debug.robots()"), 'Demo robot did not advance'
             shot=await command('Page.captureScreenshot',dict(format='png'))
             (ROOT/'_shots'/'navigation-lab.png').write_bytes(base64.b64decode(shot['data']))
             assert not errors, errors

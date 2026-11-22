@@ -1,3 +1,4 @@
+import {solveLeg,footCycle} from '../frontend/src/lib/legIK';
 import { robotCollision, advanceRobot, motionHeading, travelPhase } from '../frontend/src/lib/robotMotion';
 // 离线校验：在 Node 里跑一遍新的程序化场景构建，
 // 核对性能预算，并逐台复核屋顶设备确实落在屋面安全环内（不穿女儿墙、不越屋面）。
@@ -215,4 +216,18 @@ console.log(`\n结论: ${okGood ? 'PASS' : 'FAIL'}`);
   const one=travelPhase(0,.35), many=Array.from({length:60}).reduce<number>(p=>travelPhase(p,.35/60),0);
   if(Math.abs(one-many)>1e-8 || travelPhase(one,0)!==one) throw new Error('Gait depends on frame rate or continues while stopped');
   console.log('[robot-motion] heading / distance-driven gait PASS');
+}
+
+{
+  const upper={y:-.5,z:.15},lower={y:-.45,z:-.2};
+  for(let i=0;i<100;i++) {
+    const c=footCycle(i/100*Math.PI*2);
+    const target={y:-.8+c.lift*.1,z:c.stride*.2};
+    const result=solveLeg(upper,lower,target);
+    const rotate=(p:{y:number;z:number},a:number)=>({y:p.y*Math.cos(a)-p.z*Math.sin(a),z:p.y*Math.sin(a)+p.z*Math.cos(a)});
+    const u=rotate(upper,result.hip),l=rotate(lower,result.hip+result.knee);
+    if(Math.hypot(u.y+l.y-target.y,u.z+l.z-target.z)>1e-6) throw new Error('IK foot misses ground target');
+    if(i<50 && c.lift!==0) throw new Error('Stance foot lifts from ground');
+  }
+  console.log('[robot-IK] forward verification / planted stance PASS');
 }

@@ -177,3 +177,28 @@ def test_classroom_demo_repeatable_detour_and_frozen_battery(monkeypatch):
     finally:
         g.obstacles=saved
         g.revision+=1
+
+
+def test_moving_people_stay_clear_of_buildings_and_robots():
+    from app.services.pedestrians import populate, move_people
+    import math
+    g=rs.campus_grid()
+    saved,revision=dict(g.obstacles),g.revision
+    try:
+        people=populate(g,rs.ROBOTS,36,seed=24)
+        start={p['id']:(p['x'],p['z']) for p in people}
+        for _ in range(20):
+            before={p['id']:(p['x'],p['z']) for p in people}
+            move_people(g,rs.ROBOTS)
+            for p in people:
+                obstacles=g.obstacles
+                g.obstacles={k:v for k,v in obstacles.items() if v.get('kind') != '行人'}
+                assert g.segment_clear(*before[p['id']],p['x'],p['z'])
+                g.obstacles=obstacles
+                assert all(math.hypot(p['x']-q['x'],p['z']-q['z'])>.548 for q in people if q['id']!=p['id'])
+                assert all(math.hypot(p['x']-r['x'],p['z']-r['z'])>.9 for r in rs.ROBOTS)
+                g.obstacles[p['id']]=p
+        assert sum(math.hypot(p['x']-start[p['id']][0],p['z']-start[p['id']][1])>.3 for p in people)>10
+    finally:
+        g.obstacles=saved
+        g.revision=revision+1

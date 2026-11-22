@@ -31,7 +31,7 @@ def grid_or_fail():
 @router.get('')
 async def state():
     g = grid_or_fail()
-    return {'demo_mode': simulator.demo_mode, 'demo_obstacle': DEMO_OBSTACLE, 'revision': g.revision, 'index': {'nodes': g.nodes.size, 'height': height(g.nodes.root)},
+    return {'people_moving': simulator.people_moving, 'demo_mode': simulator.demo_mode, 'demo_obstacle': DEMO_OBSTACLE, 'revision': g.revision, 'index': {'nodes': g.nodes.size, 'height': height(g.nodes.root)},
             'obstacles': list(g.obstacles.values()), 'last_plan': g.last_plan,
             'robots': [{k: r.get(k) for k in ('id', 'x', 'z', 'path', 'queue', 'cooperative',
                         'yielding_to', 'navigation_blocked', 'plan_stats', 'comparison')} for r in ROBOTS]}
@@ -98,9 +98,11 @@ async def demo_reset():
     for cache in (simulator._path, simulator._path_key, simulator._dwell,
                   simulator._dock_target, simulator._stuck, simulator._recover):
         cache.clear()
+    simulator.reset_epoch += 1
     ROBOTS[:] = deepcopy(INITIAL_ROBOTS)
     for robot in ROBOTS:
-        robot.update(status='待命', battery=100, speed=0, queue=[], path=[], cooperative=False)
+        robot.update(motion_epoch=simulator.reset_epoch, status='待命', battery=100, speed=0, queue=[], path=[], cooperative=False)
+    simulator.people_moving = False
     simulator.demo_mode = True
     rings = [r for zone in load_campus()['campus']['zones'] for r in zone['rings']]
     # Deterministic open corridor inside campus, with room to detour around its midpoint.
@@ -155,4 +157,14 @@ async def demo_start():
 @router.post('/demo/exit')
 async def demo_exit():
     simulator.demo_mode = False
+    return await state()
+
+
+class PeopleMotion(BaseModel):
+    enabled: bool
+
+
+@router.post('/pedestrians/motion')
+async def people_motion(body: PeopleMotion):
+    simulator.people_moving = body.enabled
     return await state()

@@ -35,3 +35,31 @@ def populate(grid, robots, count=36, seed=None):
         people.append(person)
     grid.revision += 1
     return people
+
+
+
+def move_people(grid, robots, dt=1.0):
+    """Move at 0.8 m/s; swept checks prevent walking into buildings or robots."""
+    from .campus_grid import _seg_dist
+    rings = [r for zone in load_campus()['campus']['zones'] for r in zone['rings']]
+    moved = False
+    for key in list(grid.obstacles):
+        person = grid.obstacles[key]
+        if person.get('kind') != '行人':
+            continue
+        x,z=person['x'],person['z']
+        nx,nz=x+math.sin(person['heading'])*.08*dt,z+math.cos(person['heading'])*.08*dt
+        # Exclude only this person's own collision body.
+        del grid.obstacles[key]
+        safe = all(any(_inside(*p,r) for r in rings) for p in ((nx,nz),((x+nx)/2,(z+nz)/2)))
+        safe = safe and grid.segment_clear(x,z,nx,nz)
+        safe = safe and all(_seg_dist(r['x'],r['z'],x,z,nx,nz) > .9 for r in robots)
+        if safe:
+            person.update(x=nx,z=nz,speed=.08)
+            moved=True
+        else:
+            person.update(heading=person['heading']+math.pi*.65,speed=0)
+        grid.obstacles[key]=person
+    if moved:
+        grid.revision+=1
+    return moved

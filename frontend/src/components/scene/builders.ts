@@ -388,6 +388,8 @@ export function makeQuadrupedFallback(color: number): QuadrupedParts {
     knee.add(foot);
     hip.add(knee);
     group.add(hip);
+    hip.userData.foot = new THREE.Vector3(0,-.5,0);
+    hip.userData.direction = -1;
     legs.push({ hip, knee });
   }
   return { group, body, lidar, legs };
@@ -521,6 +523,13 @@ export function makeQuadruped(proto: DogProto | null, color: number): QuadrupedP
     knee.add(lo);
     hip.add(knee);
     wrap.add(hip);
+    const positions=proto.geos[2+i*2].getAttribute('position');
+    let bottom=Infinity;
+    for(let v=0;v<positions.count;v++) bottom=Math.min(bottom,positions.getY(v));
+    let zSum=0,count=0;
+    for(let v=0;v<positions.count;v++) if(positions.getY(v)<bottom+.025){zSum+=positions.getZ(v);count++;}
+    hip.userData.foot = new THREE.Vector3(0,bottom,zSum/Math.max(1,count));
+    hip.userData.direction = 1;
     legs.push({ hip, knee });
   });
 
