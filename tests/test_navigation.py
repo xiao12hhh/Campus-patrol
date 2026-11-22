@@ -148,3 +148,32 @@ def test_budgeted_search_resumes_and_invalidates_on_obstacle_change(grid):
     for key in list(grid.obstacles):
         grid.remove_obstacle(key)
     assert grid.plan((-3,0),(3,0)) == [(3,0)]
+
+
+def test_classroom_demo_repeatable_detour_and_frozen_battery(monkeypatch):
+    robots = deepcopy(rs.ROBOTS)
+    monkeypatch.setattr(rs,'ROBOTS',robots)
+    monkeypatch.setattr(navigation,'ROBOTS',robots)
+    sim = rs.RobotSimulator()
+    monkeypatch.setattr(navigation,'simulator',sim)
+    g = rs.campus_grid()
+    saved = dict(g.obstacles)
+    try:
+        asyncio.run(navigation.demo_reset())
+        first=(robots[0]['x'],robots[0]['z'])
+        assert sim.demo_mode and all(r['battery']==100 for r in robots)
+        asyncio.run(navigation.demo_obstacle())
+        comparison=robots[0]['comparison']
+        assert comparison['before'] and comparison['after']
+        assert comparison['before'] != comparison['after']
+        assert (robots[0]['x'],robots[0]['z'])==first
+        asyncio.run(navigation.demo_start())
+        sim._tick(robots[0])
+        assert robots[0]['battery']==100
+        asyncio.run(navigation.demo_reset())
+        assert (robots[0]['x'],robots[0]['z'])==first
+        asyncio.run(navigation.demo_exit())
+        assert not sim.demo_mode
+    finally:
+        g.obstacles=saved
+        g.revision+=1

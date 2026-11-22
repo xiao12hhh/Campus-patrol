@@ -1,4 +1,4 @@
-import { robotCollision, advanceRobot } from '../frontend/src/lib/robotMotion';
+import { robotCollision, advanceRobot, motionHeading, travelPhase } from '../frontend/src/lib/robotMotion';
 // 离线校验：在 Node 里跑一遍新的程序化场景构建，
 // 核对性能预算，并逐台复核屋顶设备确实落在屋面安全环内（不穿女儿墙、不越屋面）。
 import * as THREE from 'three';
@@ -192,4 +192,27 @@ console.log(`\n结论: ${okGood ? 'PASS' : 'FAIL'}`);
   }
   if(queue.length || Math.hypot(point.x-1,point.z)>0.001) throw new Error('Telemetry queue stalled');
   console.log('[robot-motion] thin walls / ordered corner interpolation PASS');
+}
+
+{
+  // At 60 FPS a 0.35-unit/s stream must cover each sample evenly in one second.
+  let point={x:0,z:0}; const queue=[{x:.35,z:0}];
+  const speeds:number[]=[];
+  for(let frame=0;frame<60;frame++) {
+    const next=advanceRobot(point,queue,.35/60,()=>true);
+    speeds.push(Math.hypot(next.x-point.x,next.z-point.z)*60);point=next;
+  }
+  if(Math.abs(point.x-.35)>1e-6 || Math.max(...speeds)-Math.min(...speeds)>.001)
+    throw new Error('Robot movement pulses between telemetry samples instead of moving steadily');
+  console.log('[robot-motion] steady 60 FPS telemetry playback PASS');
+}
+
+{
+  for(const [dx,dz] of [[1,0],[0,1],[-1,0],[0,-1]]) {
+    const yaw=motionHeading(dx,dz);
+    if(Math.abs(-Math.sin(yaw)-dx)>1e-8 || Math.abs(-Math.cos(yaw)-dz)>1e-8) throw new Error('Model facing differs from travel');
+  }
+  const one=travelPhase(0,.35), many=Array.from({length:60}).reduce<number>(p=>travelPhase(p,.35/60),0);
+  if(Math.abs(one-many)>1e-8 || travelPhase(one,0)!==one) throw new Error('Gait depends on frame rate or continues while stopped');
+  console.log('[robot-motion] heading / distance-driven gait PASS');
 }

@@ -136,6 +136,7 @@ class RobotSimulator:
     EVENT_CHANCE = 0.22
 
     def __init__(self) -> None:
+        self.demo_mode = False
         self.clients: set = set()
         self.running = False
         self._dwell: dict[str, int] = {}
@@ -277,14 +278,14 @@ class RobotSimulator:
             return
 
         # 低电量 -> 返航充电（检测/巡检中均可触发）
-        if robot["status"] in ("巡检中", "检测中") and robot["battery"] <= self.LOW_BATTERY:
+        if robot["status"] in ("巡检中", "检测中") and not self.demo_mode and robot["battery"] <= self.LOW_BATTERY:
             dock = min(DOCKS, key=lambda d: (d["x"] - robot["x"]) ** 2 + (d["z"] - robot["z"]) ** 2)
             self._dock_target[rid] = dock
             robot["status"] = "返航"
 
         if robot["status"] == "巡检中":
             arrived = self._navigate(robot, target)
-            robot["battery"] = max(0.0, robot["battery"] - self.DRAIN_PER_TICK)
+            robot["battery"] = max(0.0, robot["battery"] - (0 if self.demo_mode else self.DRAIN_PER_TICK))
             if arrived:
                 robot["status"] = "检测中"
                 self._dwell[rid] = self.DETECT_SECONDS
@@ -299,7 +300,7 @@ class RobotSimulator:
         elif robot["status"] == "返航":
             dock = self._dock_target.get(rid) or DOCKS[0]
             arrived = self._navigate(robot, dock)
-            robot["battery"] = max(0.0, robot["battery"] - self.DRAIN_PER_TICK)
+            robot["battery"] = max(0.0, robot["battery"] - (0 if self.demo_mode else self.DRAIN_PER_TICK))
             if arrived:
                 robot["status"] = "充电中"
         elif robot["status"] == "充电中":
@@ -320,9 +321,18 @@ class RobotSimulator:
         if robot.get('plan_stats', {}).get('reason') == 'budget_exceeded' and monotonic() >= robot.get('_retry_at', 0):
             self._path_key.pop(rid, None)
         if self._path_key.get(rid) != key:
+            old_key = self._path_key.get(rid)
+            if old_key and old_key[:2] == key[:2] and old_key[2] != key[2]:
+                old_path = self._path.get(rid, [])
+                robot['comparison'] = {'before': [[robot['x'],robot['z']]] + [list(p) for p in old_path],
+                                       'after': [], 'revision': key[2]}
+            elif old_key and old_key[:2] != key[:2]:
+                robot.pop('comparison', None)
             pts = grid.plan((robot["x"], robot["z"]), (target["x"], target["z"])) if grid else []
             robot["plan_stats"] = dict(grid.last_plan) if grid else {}
             robot["_retry_at"] = monotonic() + 1
+            if robot.get('comparison', {}).get('revision') == key[2] and pts:
+                robot['comparison']['after'] = [[robot['x'],robot['z']]] + [list(p) for p in pts]
             robot["navigation_blocked"] = not bool(pts)
             self._path[rid] = [list(p) for p in pts]
             self._path_key[rid] = key

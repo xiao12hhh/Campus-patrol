@@ -3,8 +3,8 @@ import { API_BASE } from '../lib/api';
 import { CampusData } from '../lib/campus';
 
 type Obstacle = { id: string; x: number; z: number; radius: number; kind: string };
-type Bot = { id: string; x: number; z: number; path: number[][]; queue: {x:number;z:number;name:string}[]; cooperative: boolean; yielding_to: string; navigation_blocked: boolean; plan_stats?: {milliseconds:number;revision:number;reason?:string} };
-type State = { revision: number; index: { nodes: number; height: number }; obstacles: Obstacle[]; robots: Bot[] };
+type Bot = { comparison?: {before:number[][];after:number[][];revision:number}; id: string; x: number; z: number; path: number[][]; queue: {x:number;z:number;name:string}[]; cooperative: boolean; yielding_to: string; navigation_blocked: boolean; plan_stats?: {milliseconds:number;revision:number;reason?:string} };
+type State = { demo_mode:boolean; revision: number; index: { nodes: number; height: number }; obstacles: Obstacle[]; robots: Bot[] };
 const colors = ['#18b8a6', '#f7ad42', '#8285ff'];
 
 export default function NavigationLab({campus}: {campus: CampusData | null}) {
@@ -38,6 +38,13 @@ export default function NavigationLab({campus}: {campus: CampusData | null}) {
   }
   return <div className="card">
     <div className="card-title">AVL 协同巡检实验</div>
+    <div className="btn-row" style={{flexWrap:'wrap'}}>
+      <button disabled={busy} onClick={()=>void act('/demo/reset','POST')}>一键复位演示</button>
+      <button disabled={busy || !data?.demo_mode} onClick={()=>void act('/demo/obstacle','POST')}>放置固定施工障碍</button>
+      <button disabled={busy || !data?.demo_mode} onClick={()=>void act('/demo/start','POST')}>开始演示</button>
+      <button disabled={busy || !data?.demo_mode} onClick={()=>void act('/demo/exit','POST')}>退出演示模式</button>
+    </div>
+    <p>{data?.demo_mode ? '课堂演示：电量冻结 · 复位 → 放障碍看对比 → 开始演示' : '常规模式：正常耗电与返航'} · 复位会清空障碍和任务</p>
     <p>节点存储可通行区域、邻接关系与距离代价；A* 通过 AVL 检索邻接节点。点击下图选择临时障碍位置。</p>
     <small>已索引 {data?.index.nodes ?? 0} 个节点 · 树高 {data?.index.height ?? 0} · 地图版本 {data?.revision ?? 0}</small>
     <svg aria-label="协同巡检路线与动态障碍地图" viewBox="-70 -55 125 110" style={{width:'100%',background:'#10222e',borderRadius:10, cursor:'crosshair'}} onClick={e => {
@@ -50,6 +57,10 @@ export default function NavigationLab({campus}: {campus: CampusData | null}) {
         return rings.map((ring,i)=><polygon key={`${f.id}-${i}`} points={ring.map(p=>p.join(',')).join(' ')} fill="#354753" stroke="#6c7d89" strokeWidth=".15"><title>{f.name}</title></polygon>);
       })}
       {data?.robots.map((r,i) => <g key={r.id}>
+        {r.comparison && <>
+          <polyline points={r.comparison.before.map(p=>p.join(',')).join(' ')} fill="none" stroke="#ffbd70" strokeWidth=".5" strokeDasharray="1 .7" />
+          <polyline points={r.comparison.after.map(p=>p.join(',')).join(' ')} fill="none" stroke={colors[i]} strokeWidth=".65" />
+        </>}
         <polyline points={[[r.x,r.z],...(r.path||[])].map(p=>p.join(',')).join(' ')} fill="none" stroke={colors[i]} strokeWidth=".5" />
         {r.cooperative && r.queue.map((p,j)=><circle key={j} cx={p.x} cy={p.z} r=".7" fill={colors[i]}><title>{p.name}</title></circle>)}
         <circle cx={r.x} cy={r.z} r="1" fill={colors[i]} />
@@ -66,6 +77,7 @@ export default function NavigationLab({campus}: {campus: CampusData | null}) {
       <button disabled={busy} onClick={()=>void act('/pedestrians','POST',{count:0})}>清空行人</button>
       <button disabled={busy || !data} onClick={()=>void act('/allocate','POST')}>分配三机巡检子区</button>
     </div>
+    <p>橙色虚线：绕行前 · 彩色实线：绕行后（保留最近一次同目标重规划）</p>
     {point && <small>已选位置：x {point.x}，z {point.z}</small>}
     {error && <p role="alert" style={{color:'#e75b5b'}}>{error}</p>}
     <p>校园行人：{data?.obstacles.filter(o=>o.kind==='行人').length ?? 0} 人 · 随机站立，参与避障</p>

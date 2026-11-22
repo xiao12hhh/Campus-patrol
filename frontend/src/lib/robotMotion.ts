@@ -41,11 +41,23 @@ export function robotCollision(features: LocalFeature[]) {
   };
 }
 
-/** Consume telemetry in order, rather than interpolating diagonally across a corner. */
-export function advanceRobot(cur: Point, queue: Point[], alpha: number, clear: (a: Point,b: Point)=>boolean): Point {
-  const next=queue[0];
-  if(!next || !clear(cur,next)) return cur;
-  const p={x:cur.x+(next.x-cur.x)*alpha,z:cur.z+(next.z-cur.z)*alpha};
-  if(Math.hypot(p.x-next.x,p.z-next.z)<0.001) {queue.shift();return next;}
-  return p;
+/** Spend a distance budget along received segments; never predict beyond telemetry. */
+export function advanceRobot(cur: Point, queue: Point[], distanceBudget: number, clear: (a: Point,b: Point)=>boolean): Point {
+  let point=cur, remaining=Math.max(0,distanceBudget);
+  while(queue.length && remaining>1e-9) {
+    const next=queue[0];
+    if(!clear(point,next)) break;
+    const length=Math.hypot(next.x-point.x,next.z-point.z);
+    if(length<=remaining+1e-9) {point=next;queue.shift();remaining=Math.max(0,remaining-length);}
+    else {const fraction=remaining/length;point={x:point.x+(next.x-point.x)*fraction,z:point.z+(next.z-point.z)*fraction};remaining=0;}
+  }
+  return point;
+}
+
+/** The model faces -Z at zero yaw. Derive yaw from visible displacement. */
+export function motionHeading(dx:number,dz:number) {return Math.atan2(-dx,-dz);}
+
+/** Accumulated travel phase never jumps when speed changes or wall-clock time grows. */
+export function travelPhase(phase:number, distance:number) {
+  return (phase + Math.max(0,distance) / .24 * Math.PI * 2) % (Math.PI*2);
 }

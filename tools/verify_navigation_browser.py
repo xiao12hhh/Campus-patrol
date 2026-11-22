@@ -92,6 +92,14 @@ async def main():
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='重新随机生成行人').click()")
             await asyncio.sleep(3)
             assert await evaluate("window.__scene_debug.pedestrianCount()===36"), 'Regenerate failed'
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='一键复位演示').click()")
+            await asyncio.sleep(2)
+            assert await evaluate("document.body.innerText.includes('电量冻结')")
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='放置固定施工障碍').click()")
+            await asyncio.sleep(2)
+            assert await evaluate("!!document.querySelector('polyline[stroke-dasharray]')"), 'Before-route overlay missing'
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='开始演示').click()")
+            await asyncio.sleep(2)
             shot=await command('Page.captureScreenshot',dict(format='png'))
             (ROOT/'_shots'/'navigation-lab.png').write_bytes(base64.b64decode(shot['data']))
             assert not errors, errors

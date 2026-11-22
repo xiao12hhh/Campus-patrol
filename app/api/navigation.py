@@ -1,4 +1,5 @@
 """Teaching demo: AVL navigation index, dynamic obstacles and disjoint patrol sectors."""
+from copy import deepcopy
 import math
 import uuid
 from typing import Literal
@@ -6,6 +7,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.services.avl import AVL, height
 from app.services.robot_simulator import campus_grid, simulator, ROBOTS, ROUTES
+
+INITIAL_ROBOTS = deepcopy(ROBOTS)
+DEMO_OBSTACLE = None
 
 router = APIRouter(prefix='/api/navigation', tags=['navigation'])
 
@@ -27,10 +31,10 @@ def grid_or_fail():
 @router.get('')
 async def state():
     g = grid_or_fail()
-    return {'revision': g.revision, 'index': {'nodes': g.nodes.size, 'height': height(g.nodes.root)},
+    return {'demo_mode': simulator.demo_mode, 'demo_obstacle': DEMO_OBSTACLE, 'revision': g.revision, 'index': {'nodes': g.nodes.size, 'height': height(g.nodes.root)},
             'obstacles': list(g.obstacles.values()), 'last_plan': g.last_plan,
             'robots': [{k: r.get(k) for k in ('id', 'x', 'z', 'path', 'queue', 'cooperative',
-                        'yielding_to', 'navigation_blocked', 'plan_stats')} for r in ROBOTS]}
+                        'yielding_to', 'navigation_blocked', 'plan_stats', 'comparison')} for r in ROBOTS]}
 
 
 @router.post('/obstacles')
@@ -80,3 +84,75 @@ class PedestrianRequest(BaseModel):
 async def random_pedestrians(body: PedestrianRequest):
     from app.services.pedestrians import populate
     return {'pedestrians': populate(grid_or_fail(), ROBOTS, body.count)}
+
+
+@router.post('/demo/reset')
+async def demo_reset():
+    global DEMO_OBSTACLE
+    from app.services.campus_data import load_campus
+    from app.services.campus_grid import _inside
+    g = grid_or_fail()
+    g.obstacles.clear()
+    g.revision += 1
+    g._searches.clear()
+    for cache in (simulator._path, simulator._path_key, simulator._dwell,
+                  simulator._dock_target, simulator._stuck, simulator._recover):
+        cache.clear()
+    ROBOTS[:] = deepcopy(INITIAL_ROBOTS)
+    for robot in ROBOTS:
+        robot.update(status='待命', battery=100, speed=0, queue=[], path=[], cooperative=False)
+    simulator.demo_mode = True
+    rings = [r for zone in load_campus()['campus']['zones'] for r in zone['rings']]
+    # Deterministic open corridor inside campus, with room to detour around its midpoint.
+    for z in range(-30, 1, 2):
+        for x in range(-50, -10, 2):
+            start, goal = (x,z), (x+6,z)
+            if not all(any(_inside(*p,r) for r in rings) for p in (start,goal)):
+                continue
+            if not g.segment_clear(*start,*goal):
+                continue
+            item = dict(id='demo-construction',x=x+3,z=z,radius=.6,kind='施工')
+            g.obstacles[item['id']] = item
+            detour = g.plan(start, goal)
+            del g.obstacles[item['id']]
+            if not detour:
+                continue
+            DEMO_OBSTACLE = item
+            robot = ROBOTS[0]
+            robot.update(x=x,z=z,heading=math.pi/2,mission='课堂演示路线')
+            simulator.set_queue(robot['id'], [dict(x=goal[0],z=goal[1],name='演示终点')])
+            robot['status']='待命'
+            robot['path']=[list(goal)]
+            simulator._path[robot['id']]=[list(goal)]
+            simulator._path_key[robot['id']]=(float(goal[0]),float(goal[1]),g.revision)
+            return await state()
+    raise HTTPException(409,'未找到可复现的演示通道')
+
+
+@router.post('/demo/obstacle')
+async def demo_obstacle():
+    if not simulator.demo_mode or not DEMO_OBSTACLE:
+        raise HTTPException(400,'请先一键复位演示')
+    item = DEMO_OBSTACLE
+    await add_obstacle(Obstacle(x=item['x'],z=item['z'],radius=item['radius']))
+    # Plan while paused so the before/after comparison is visible before starting.
+    robot = ROBOTS[0]
+    position = robot['x'], robot['z']
+    simulator._navigate(robot, robot['queue'][0])
+    robot['x'], robot['z'] = position
+    robot['speed']=0
+    return await state()
+
+
+@router.post('/demo/start')
+async def demo_start():
+    if not simulator.demo_mode:
+        raise HTTPException(400,'请先一键复位演示')
+    simulator.control([ROBOTS[0]['id']], 'start')
+    return await state()
+
+
+@router.post('/demo/exit')
+async def demo_exit():
+    simulator.demo_mode = False
+    return await state()

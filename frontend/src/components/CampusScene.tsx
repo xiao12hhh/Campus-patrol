@@ -1,4 +1,4 @@
-import { robotCollision, advanceRobot, Point } from '../lib/robotMotion';
+import { robotCollision, advanceRobot, motionHeading, travelPhase, Point } from '../lib/robotMotion';
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -181,6 +181,7 @@ interface RobotVis {
   heading: number; targetHeading: number;
   routeLine: THREE.Line | null;
   motionQueue: Point[];
+  renderSpeed: number; gaitPhase: number; gaitAmplitude: number;
   labelText: string;
   pathRibbon: THREE.Mesh | null;
   pathSig: string;
@@ -966,26 +967,34 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
 
       // 机器人：平滑运动 + 步态 + 轨迹
       for (const rv of E.robots.values()) {
-        const next = advanceRobot(rv.cur, rv.motionQueue, 1 - Math.pow(0.0005, dt * Math.max(1, rv.motionQueue.length)), E.movementClear);
+        // Replay the server's 1 Hz samples at near-constant speed, retaining every corner.
+        const desiredSpeed = rv.motionQueue.length ? Math.min(.7, .35 + Math.max(0,rv.motionQueue.length-2)*.035) : 0;
+        rv.renderSpeed += (desiredSpeed-rv.renderSpeed)*(1-Math.exp(-8*dt));
+        const next = advanceRobot(rv.cur, rv.motionQueue, rv.renderSpeed*dt, E.movementClear);
+        const dx=next.x-rv.cur.x, dz=next.z-rv.cur.z;
+        const travel=Math.hypot(dx,dz);
         rv.cur.set(next.x, 0, next.z);
-        const speed = rv.cur.distanceTo(rv.prev) / Math.max(dt, 1e-4);
+        const speed=travel/Math.max(dt,1e-4);
         rv.prev.copy(rv.cur);
         rv.group.position.copy(rv.cur);
+        if(travel>1e-6) rv.targetHeading=motionHeading(dx,dz);
         let dh = rv.targetHeading - rv.heading;
         dh = Math.atan2(Math.sin(dh), Math.cos(dh));
-        rv.heading += dh * (1 - Math.pow(0.01, dt));
+        rv.heading += dh * (1-Math.exp(-9*dt));
         rv.group.rotation.y = rv.heading;
 
-        const amp = clamp01(speed / 0.25);
-        const freq = 5 + speed * 9;
+        rv.gaitPhase=travelPhase(rv.gaitPhase,travel);
+        rv.gaitAmplitude += (clamp01(speed/.25)-rv.gaitAmplitude)*(1-Math.exp(-12*dt));
+        const amp=rv.gaitAmplitude;
         const gait = rv.parts.body.userData.gait || GAIT_FALLBACK;
         rv.parts.legs.forEach((leg, i) => {
-          const ph = ROBOT_PHASES[i];
-          leg.hip.rotation.x = gait.hip * amp * Math.sin(t * freq + ph);
-          leg.knee.rotation.x = gait.knee * amp * Math.max(0, Math.sin(t * freq + ph + Math.PI / 2));
+          const phase=rv.gaitPhase+ROBOT_PHASES[i];
+          const swing=Math.sin(phase);
+          leg.hip.rotation.x = gait.hip * amp * swing;
+          leg.knee.rotation.x = gait.knee * amp * Math.max(0,Math.sin(phase+Math.PI/2));
         });
         const baseY = (rv.parts.body.userData.baseY as number) ?? 0.72;
-        rv.parts.body.position.y = baseY + 0.035 * amp * Math.sin(2 * t * freq);
+        rv.parts.body.position.y = baseY + .022*amp*Math.sin(2*rv.gaitPhase);
         rv.parts.lidar.rotation.y += dt * 5;
 
         if (rv.cur.distanceTo(rv.lastTrail) > 0.35) {
@@ -1052,7 +1061,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         const fallback = rv ? null : (cb.current.robots || []).find(r => r.id === E.followId);
         if (rv || fallback) {
           const pos = rv ? rv.group.position : B.W(fallback!.x, 0, fallback!.z);
-          const baseYaw = rv ? rv.group.rotation.y : -(fallback!.heading || 0);
+          const baseYaw = rv ? rv.group.rotation.y : (fallback!.heading || 0) + Math.PI;
           if (cb.current.firstPerson) {
             // 第一人称：相机放在狗头位置，视线方向 = 狗朝向 + 用户拖拽出来的 yaw/pitch 偏移
             firstPerson = true;
@@ -1366,7 +1375,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         rv = {
           id: r.id, group: parts.group, parts, label, ring, trail, trailPts: [], lastTrail: cur.clone(),
           cur: cur.clone(), target: cur.clone(), prev: cur.clone(),
-          heading: -(r.heading || 0), targetHeading: -(r.heading || 0), routeLine, motionQueue: [], labelText: `${r.id} · ${Math.round(r.battery)}%`,
+          heading: (r.heading || 0) + Math.PI, targetHeading: (r.heading || 0) + Math.PI, routeLine, motionQueue: [], renderSpeed: 0, gaitPhase: 0, gaitAmplitude: 0, labelText: `${r.id} · ${Math.round(r.battery)}%`,
           queueGroup: null, queuePins: [], queuePads: [], queueSig: '', queueIndex: 0,
           pathRibbon: null, pathSig: '',
         };
@@ -1376,7 +1385,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       const last = rv.motionQueue[rv.motionQueue.length - 1] ?? rv.cur;
       if (Math.hypot(last.x-r.x,last.z-r.z)>0.001 && rv.motionQueue.length<128) rv.motionQueue.push(incoming);
       rv.target.copy(B.W(r.x, 0, r.z));
-      rv.targetHeading = -(r.heading || 0);
+      rv.targetHeading = (r.heading || 0) + Math.PI;
 
       // 后端给的绕行折线（栅格 A* 结果）：签名一变就重画一条贴地带，替代原来的直线虚线
       const pth = (r as unknown as { path?: [number, number][] }).path || [];
