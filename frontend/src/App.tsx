@@ -61,6 +61,9 @@ export default function App() {
     const q = new URLSearchParams(location.search).get('m');
     return q === 'robot' || q === 'route' || q === 'grid' ? (q as Module) : 'campus';
   });
+  const showcaseTrees = useRef<boolean | null>(null);
+  const [showcaseStep,setShowcaseStep]=useState(-1);
+  const [navigationState,setNavigationState]=useState<any>(null);
   const [showcaseActive, setShowcaseActive] = useState(false);
   const [assistantDemo, setAssistantDemo] = useState(0);
   const [campus, setCampus] = useState<CampusData | null>(null);
@@ -85,7 +88,7 @@ export default function App() {
   const [pedestrians, setPedestrians] = useState<any[]>([]);
   useEffect(() => {
     let live = true;
-    const poll = async () => { try { const r = await fetch(`${API_BASE}/api/navigation`, {signal: AbortSignal.timeout(8000)}); if(r.ok) { const data=await r.json(); if(live) {const next=data.obstacles.filter((o:any)=>o.kind==='行人');setPedestrians(prev=>JSON.stringify(prev)===JSON.stringify(next)?prev:next);} } } catch {} };
+    const poll = async () => { try { const r = await fetch(`${API_BASE}/api/navigation`, {signal: AbortSignal.timeout(8000)}); if(r.ok) { const data=await r.json(); if(live) {setNavigationState(data);const next=data.obstacles.filter((o:any)=>o.kind==='行人');setPedestrians(prev=>JSON.stringify(prev)===JSON.stringify(next)?prev:next);} } } catch {} };
     void poll(); const timer=setInterval(poll,2000);
     return () => {live=false;clearInterval(timer);};
   }, []);
@@ -432,6 +435,8 @@ export default function App() {
             firstPerson={firstPerson}
             closeThird={closeThird}
             pedestrians={pedestrians}
+            navigationState={navigationState}
+            showcaseStep={showcaseStep}
           addPointMode={addPoint}
           onPickPoint={onPickPoint}
             tod={tod}
@@ -791,15 +796,23 @@ export default function App() {
         <span>地理数据 © OpenStreetMap contributors (ODbL) · 建筑高度按公开资料估算</span>
       </footer>
 
-      <Showcase onActive={setShowcaseActive} onStage={step => {
+      <Showcase live={navigationState} onActive={setShowcaseActive} onStage={(step,state) => {
+        setShowcaseStep(step); setNavigationState(state);
+        if(step >= 0 && showcaseTrees.current === null)showcaseTrees.current=layers.trees;
+        setLayers(l=>({...l, trees:[2,3,4].includes(step) ? false : showcaseTrees.current ?? l.trees}));
+        if(step < 0)showcaseTrees.current=null;
         sceneRef.current?.tour('stop');
         setAddPoint(false); setSelectedLandmark(null); setTod('day'); setRegion('主校区');
         setModule(step === 0 || step < 0 ? 'campus' : 'robot');
-        setFirstPerson(false); setCloseThird(step === 1 || step === 3);
-        setFollowId(step === 1 || step === 3 ? 'SPOT-01' : null);
-        setSelectedRobot('SPOT-01'); setViewMode(step === 2 || step === 4 ? 'map' : 'twin');
+        setFirstPerson(false); setCloseThird(step === 1);
+        setFollowId(step === 1 ? 'SPOT-01' : null);
+        setSelectedRobot('SPOT-01'); setViewMode('twin');
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          if (step !== 1 && step !== 3) sceneRef.current?.resetView();
+          if ([2,3,4].includes(step) && state?.robots?.[0]) {
+            const r=state.robots[0], end=r.queue?.[0] || r;
+            const x=(r.x+end.x)/2,z=(r.z+end.z)/2;
+            sceneRef.current?.setCameraState({pos:[x+.15,2.6,z+3.3],target:[x,0,z]});
+          } else if(step !== 1) sceneRef.current?.resetView();
         }));
         if (step === 5) setAssistantDemo(n => n + 1);
       }} />

@@ -68,6 +68,20 @@ async def main():
                 if await evaluate("!!document.querySelector('.assistant-map')"): break
             assert await evaluate("!!document.querySelector('.assistant-map')"), 'Route missing'
             assert await evaluate("document.querySelector('.assistant-messages').innerText.includes('地图计算')")
+            await evaluate("Array.from(document.querySelectorAll('.assistant-knowledge button')).find(b=>b.textContent.includes('AVL')).click()")
+            for _ in range(20):
+                await asyncio.sleep(.3)
+                if await evaluate("!!document.querySelector('.assistant-sources')"): break
+            assert await evaluate("document.querySelector('.assistant-messages').innerText.includes('heapq')"), 'Project implementation missing'
+            await evaluate("document.querySelector('.assistant-sources').open=true")
+            assert await evaluate("document.querySelector('.assistant-sources').innerText.includes('app/services/avl.py')")
+            await evaluate("(() => {const input=document.querySelector('input[aria-label=\"向校园助手提问\"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'它的复杂度呢？');input.dispatchEvent(new Event('input',{bubbles:true}));})()")
+            await asyncio.sleep(.2)
+            await evaluate("document.querySelector('.assistant-panel form').requestSubmit()")
+            for _ in range(20):
+                await asyncio.sleep(.3)
+                if await evaluate("document.querySelectorAll('.assistant-sources').length===2"): break
+            assert await evaluate("document.querySelectorAll('.assistant-sources').length===2"), 'Contextual follow-up failed'
             shot=await command('Page.captureScreenshot',dict(format='png'))
             (ROOT/'_shots'/'assistant.png').write_bytes(base64.b64decode(shot['data']))
             assert not errors, errors

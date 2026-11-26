@@ -154,8 +154,8 @@ function asphaltMaps(withMarks: boolean): PaveMaps {
   // 亮度 132：官方地图的车行道是"亮白路"，浅色在草地上一眼可辨，
   // 也让机器狗的巡检路线（沿路网）有清晰的底衬
   baseFill(ctx, S, 148, 18, withMarks ? 13 : 41);
-  patches(ctx, S, 17, withMarks ? 6 : 9);
-  cracks(ctx, S, 23, withMarks ? 2 : 4);
+  patches(ctx, S, 17, 2);
+  cracks(ctx, S, 23, 1, 'rgba(55,60,58,.18)');
   // 轮迹带：沿车行方向（贴图 v 方向）的两道磨光痕迹
   ctx.fillStyle = 'rgba(126,133,141,.16)';
   ctx.fillRect(S * 0.22, 0, S * 0.1, S);
@@ -193,7 +193,7 @@ function slabMaps(cols: number): PaveMaps {
   }
   grain(ctx, S, 16, 77);
   // 板缝
-  ctx.strokeStyle = 'rgba(96,96,93,.85)'; ctx.lineWidth = 1.6;
+  ctx.strokeStyle = 'rgba(96,96,93,.42)'; ctx.lineWidth = 1.6;
   for (let i = 0; i <= cols; i++) {
     const p = i * cell;
     ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
@@ -203,11 +203,11 @@ function slabMaps(cols: number): PaveMaps {
   for (let i = 0; i < 10; i++) {
     const cx = r2() * S, cy = r2() * S, rr = S * (0.05 + r2() * 0.13);
     const g2 = ctx.createRadialGradient(cx, cy, 1, cx, cy, rr);
-    g2.addColorStop(0, 'rgba(78,72,60,.30)'); g2.addColorStop(1, 'rgba(78,72,60,0)');
+    g2.addColorStop(0, 'rgba(78,72,60,.08)'); g2.addColorStop(1, 'rgba(78,72,60,0)');
     ctx.fillStyle = g2; ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
   }
   // 缺角砖
-  ctx.fillStyle = 'rgba(70,68,64,.5)';
+  ctx.fillStyle = 'rgba(70,68,64,.12)';
   for (let i = 0; i < 5; i++) {
     const x = Math.floor(r2() * cols) * cell, y = Math.floor(r2() * cols) * cell;
     ctx.beginPath();
@@ -253,14 +253,14 @@ function parkingMaps(): PaveMaps {
 
 /** 草地 —— 多尺度色斑 + 枯黄斑（作为灰度基准，实际颜色由顶点色给）。 */
 function grassMaps(): PaveMaps {
-  const S = 256;
+  const S = 512;
   const { c, ctx } = cvs(S);
   const img = ctx.createImageData(S, S);
   const nA = fbm(S, 7, 4, 3), nB = fbm(S, 29, 3, 12), nC = fbm(S, 131, 2, 40);
   const d = img.data;
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
     const v = nA(x, y) * 0.55 + nB(x, y) * 0.32 + nC(x, y) * 0.13;
-    const g = 150 + v * 74;
+    const g = 176 + v * 32;
     const i = (y * S + x) * 4;
     d[i] = g; d[i + 1] = g * 0.99; d[i + 2] = g * 0.96; d[i + 3] = 255;
   }
@@ -272,7 +272,12 @@ function grassMaps(): PaveMaps {
     g2.addColorStop(0, 'rgba(158,150,88,.3)'); g2.addColorStop(1, 'rgba(158,150,88,0)');
     ctx.fillStyle = g2; ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
   }
-  return asPaveMaps(c, (l) => 128 + (l - 150) * 1.1);
+  for(let i=0;i<16000;i++) {
+    const x=r()*S,y=r()*S;
+    ctx.strokeStyle=i%2?'rgba(241,246,221,.12)':'rgba(50,74,42,.12)';ctx.lineWidth=.6;
+    ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+(r()-.5)*3,y+1+r()*3);ctx.stroke();
+  }
+  return asPaveMaps(c, (l) => 128 + (l - 150) * .35);
 }
 
 /** 井盖 —— 铸铁圆盖 + 放射状防滑槽 + 边缘凸起。 */
@@ -371,10 +376,10 @@ export interface RoadsResult {
 }
 
 export function buildRoadsPaved(features: LocalFeature[], budget: SceneBudget): RoadsResult {
-  const dashMat = new THREE.MeshStandardMaterial({ ...asphaltMaps(true), roughness: 0.92, metalness: 0 });
-  const plainMat = new THREE.MeshStandardMaterial({ ...asphaltMaps(false), roughness: 0.95, metalness: 0 });
-  const walkMat = new THREE.MeshStandardMaterial({ ...slabMaps(4), roughness: 0.9, metalness: 0 });
-  const plazaMat = new THREE.MeshStandardMaterial({ ...plazaMaps(), roughness: 0.88, metalness: 0 });
+  const dashMat = new THREE.MeshStandardMaterial({ ...asphaltMaps(true), bumpScale: .001, roughness: 0.92, metalness: 0 });
+  const plainMat = new THREE.MeshStandardMaterial({ ...asphaltMaps(false), bumpScale: .001, roughness: 0.95, metalness: 0 });
+  const walkMat = new THREE.MeshStandardMaterial({ ...slabMaps(4), bumpScale: .001, roughness: 0.9, metalness: 0 });
+  const plazaMat = new THREE.MeshStandardMaterial({ ...plazaMaps(), bumpScale: .001, roughness: 0.88, metalness: 0 });
 
   const buckets: Record<'dash' | 'plain' | 'walk' | 'plaza', THREE.BufferGeometry[]> =
     { dash: [], plain: [], walk: [], plaza: [] };
@@ -564,7 +569,7 @@ export function buildGroundCoverPaved(features: LocalFeature[], budget: SceneBud
   const barriers: THREE.Group = new THREE.Group();
 
   const grassMat = new THREE.MeshStandardMaterial({
-    ...grassMaps(), color: 0xffffff, roughness: 1, metalness: 0, vertexColors: true,
+    ...grassMaps(), color: 0xffffff, bumpScale: .001, roughness: 1, metalness: 0, vertexColors: true,
   });
   const parkMat = new THREE.MeshStandardMaterial({ ...parkingMaps(), roughness: 0.94, metalness: 0 });
 
@@ -630,4 +635,11 @@ export function buildGroundCoverPaved(features: LocalFeature[], budget: SceneBud
     }
   }
   return { green, parking, barriers };
+}
+
+/** Base lawn uses meter-scale UVs assigned when the campus extent is fitted. */
+export function makeCampusGround() {
+  const maps=grassMaps();
+  Object.values(maps).forEach(t=>{if(t)t.anisotropy=8;});
+  return new THREE.MeshStandardMaterial({...maps,color:0xa5b29c,roughness:1,bumpScale:.001});
 }

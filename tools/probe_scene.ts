@@ -1,3 +1,4 @@
+import {constrainFollowCamera} from '../frontend/src/lib/followCamera';
 import {solveLeg,footCycle} from '../frontend/src/lib/legIK';
 import { robotCollision, advanceRobot, motionHeading, travelPhase, labelWorldHeight } from '../frontend/src/lib/robotMotion';
 // 离线校验：在 Node 里跑一遍新的程序化场景构建，
@@ -239,4 +240,19 @@ console.log(`\n结论: ${okGood ? 'PASS' : 'FAIL'}`);
     if(Math.abs(pixels-20)>1e-8) throw new Error('Robot label grows with camera zoom');
   }
   console.log('[robot-label] projected 20px across camera distances PASS');
+}
+
+{
+  const focus=new THREE.Vector3(0,.05,0);
+  const wall=new THREE.Mesh(new THREE.BoxGeometry(3,2,.02),new THREE.MeshBasicMaterial({side:THREE.DoubleSide}));
+  wall.position.set(0,1,.09);wall.updateMatrixWorld(true);
+  const hit=(direction:THREE.Vector3,length:number)=>new THREE.Raycaster(focus,direction,0,length).intersectObject(wall)[0]?.distance;
+  for(const initial of [new THREE.Vector3(0,.23,.42),focus.clone()]) {
+    const result=constrainFollowCamera(focus,initial,hit);
+    if(result.distanceTo(focus)<.22-1e-6)throw Error('Follow camera was squeezed into the robot body');
+    const direction=result.clone().sub(focus).normalize();
+    const distance=hit(direction,result.distanceTo(focus));
+    if(distance!==undefined && distance<result.distanceTo(focus)-.01)throw Error('Follow camera crossed a wall');
+  }
+  console.log('[follow-camera] wall clearance / body exclusion PASS');
 }

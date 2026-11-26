@@ -1,3 +1,5 @@
+import {constrainFollowCamera} from '../lib/followCamera';
+import {navigationDecor} from './scene/navigationDecor';
 import {loadPeople,makePerson,releasePerson} from './scene/people';
 import {solveLeg, footCycle} from '../lib/legIK';
 import { robotCollision, advanceRobot, motionHeading, travelPhase, labelWorldHeight, Point } from '../lib/robotMotion';
@@ -8,7 +10,7 @@ import { LocalFeature, Landmark, TOUR_ORDER, labelRank, CATEGORY_COLOR, ringOf }
 import { Robot, RobotEvent, VehicleRoute, RouteStop } from '../lib/api';
 import * as B from './scene/builders';
 import { buildBuildingsDetailed, SharedMats } from './scene/roofkit';
-import { buildRoadsPaved, buildRoadside, buildGroundCoverPaved } from './scene/paving';
+import { buildRoadsPaved, buildRoadside, buildGroundCoverPaved, makeCampusGround } from './scene/paving';
 import { DETAIL_PRESETS, DetailLevel, newBudget, SceneBudget } from './scene/detailcfg';
 import { loadTreeTextures, buildTrees as buildTreesPBR } from './scene/trees';
 import { TileGround, makeMapLabelSprite, makeFootprintHighlight, MAP_BG } from './scene/tileground';
@@ -60,6 +62,8 @@ interface Props {
   /** 第一人称：跟随视角换成狗头视角（需同时打开 followRobotId） */
   firstPerson?: boolean;
   closeThird?: boolean;
+  navigationState?: any;
+  showcaseStep?: number;
   pedestrians?: Array<{id:string;x:number;z:number;heading:number;color:number}>;
   /** 「点图加点」模式：点击地面即回调坐标，用来快速给任务队列加路点 */
   addPointMode?: boolean;
@@ -108,7 +112,7 @@ const TODS: Record<TimeOfDay, {
     mapTint: 0xf2dfc4,
   },
   day: {
-    skyTop: '#8fc4e3', skyBottom: '#e9f2ef', fog: '#d9e7e1', ground: '#a5b29c',
+    skyTop: '#8fc4e3', skyBottom: '#e9f2ef', fog: '#d9e7e1', ground: '#94ad83',
     sun: { color: 0xffffff, intensity: 2.9, pos: [45, 85, 35] },
     hemi: [0xbfd9ff, 0x6a7a5f, 1.15], ambient: [0x8a97a3, 0.35], windows: 0, lamps: false,
     mapTint: 0xffffff,
@@ -436,6 +440,8 @@ function fitCampus(E: Engine, immediate: boolean) {
     E.ground.geometry.dispose();
     E.ground.geometry = new THREE.PlaneGeometry(gw, gh);
     E.ground.geometry.userData.size = { w: gw, h: gh };
+    const mat=E.ground.material as THREE.MeshStandardMaterial;
+    for(const tex of [mat.map,mat.bumpMap,mat.roughnessMap])tex?.repeat.set(gw/.4,gh/.4);
   }
   E.ground.position.set(box.getCenter(new THREE.Vector3()).x, 0, box.getCenter(new THREE.Vector3()).z);
 
@@ -682,7 +688,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(200, 160),
-      new THREE.MeshStandardMaterial({ color: '#a9c78f', roughness: 1 }));
+      makeCampusGround());
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
@@ -752,6 +758,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       peopleModels: () => engine.scene.getObjectByName('campus-pedestrians')?.children.map(p=>({id:p.name,variant:p.getObjectByName('person-model')?.userData.variant,meshes:p.children.length})),
       robotPresentation: () => Array.from(engine.robots.values()).map(r=>({id:r.id,height:r.group.userData.physicalHeight,labelScale:r.label.scale.toArray(),labelVisible:r.label.visible})),
       modelScale: () => B.DOG_SCALE,
+      followCamera: () => {const r=engine.robots.get(engine.followId || '');return r ? {distance:engine.camera.position.distanceTo(r.group.position.clone().add(new THREE.Vector3(0,.05,0))),routeVisible:r.routeLine?.visible,routePoints:r.routeLine?.geometry.drawRange.count} : null;},
       resources: () => ({ ...engine.renderer.info.memory, calls: engine.renderer.info.render.calls,
         contextLost: engine.renderer.getContext().isContextLost() }),
     };
@@ -1067,11 +1074,16 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           rv.trail.geometry.setDrawRange(0, Math.max(0, (pts.length - 1) * 6));
           rv.lastTrail.copy(rv.cur);
         }
-        const closeView=!!E.followId || camera.position.distanceTo(E.controls.target)<3;
+        const closeView=[2,3,4].includes(cb.current.showcaseStep ?? -1) || !!E.followId || camera.position.distanceTo(E.controls.target)<3;
         // Overview ribbons are intentionally elevated above roads; hide them at eye level.
         if(rv.queueGroup)rv.queueGroup.visible=!closeView;
         if(rv.pathRibbon)rv.pathRibbon.visible=!closeView;
         rv.trail.visible=!closeView;
+        if(rv.routeLine) {
+          rv.routeLine.visible=E.followId===rv.id && !cb.current.firstPerson && rv.routeLine.geometry.drawRange.count>1;
+          const attr=rv.routeLine.geometry.attributes.position as THREE.BufferAttribute;
+          attr.setXYZ(0,rv.cur.x,rv.groundY+.008,rv.cur.z);attr.needsUpdate=true;
+        }
         const sel = E.followId === rv.id;
         rv.ring.visible = sel;
         if (sel) {
@@ -1137,13 +1149,10 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
             tmp.set(0, cb.current.closeThird ? 0.23 + E.fpPitch * .1 : .5, cb.current.closeThird ? .42 : 1.2).applyAxisAngle(Y_AXIS, baseYaw + (cb.current.closeThird ? E.fpYaw : 0));
             const desired = pos.clone().add(tmp);
             const focus=pos.clone().add(new THREE.Vector3(0,.05,0));
-            const keepCameraOutsideWalls=(point:THREE.Vector3)=>{
-              const direction=point.clone().sub(focus), length=direction.length();
-              if(length<.001)return;
-              const ray=new THREE.Raycaster(focus,direction.normalize(),0,length+.03);
-              const hit=ray.intersectObject(E.groups.buildings,true)[0];
-              if(hit)point.copy(focus).addScaledVector(direction,Math.max(.04,hit.distance-.03));
-            };
+            const keepCameraOutsideWalls=(point:THREE.Vector3)=>constrainFollowCamera(focus,point,(direction,length)=>{
+              const ray=new THREE.Raycaster(focus,direction,0,length);
+              return ray.intersectObject(E.groups.buildings,true)[0]?.distance;
+            });
             keepCameraOutsideWalls(desired);
             // 距离太远（刚切进来/刚重建）直接吸附，否则缓动——避免和 controls.update() 拉锯导致永远跟不近
             const gap = camera.position.distanceTo(desired);
@@ -1422,7 +1431,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           new THREE.RingGeometry(.1/parts.group.scale.x,.115/parts.group.scale.x,40),
           new THREE.MeshBasicMaterial({ color: 0x35e0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
         ring.rotation.x = -Math.PI / 2;
-        ring.position.y = .006/parts.group.scale.y;
+        ring.position.y = .016;
         ring.visible = false;
         parts.group.add(ring);
         const cur = B.W(r.x, 0, r.z);
@@ -1445,7 +1454,12 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         trail.frustumCulled = false;
         trail.renderOrder = 3;
         E.groups.robots.add(trail);
-        let routeLine: THREE.Line | null = null;
+        const subtleGeometry=new THREE.BufferGeometry();
+        subtleGeometry.setAttribute('position',new THREE.BufferAttribute(new Float32Array(160*3),3));
+        subtleGeometry.setDrawRange(0,0);
+        const routeLine=new THREE.Line(subtleGeometry,new THREE.LineBasicMaterial({color:0x35bba6,transparent:true,opacity:.48,depthWrite:false}));
+        routeLine.name='third-person-patrol-path';routeLine.frustumCulled=false;routeLine.visible=false;
+        E.groups.robots.add(routeLine);
         // 规划路线改用"贴地带状网"画真实绕行折线（后端 r.path），直线虚线会穿过楼体
         E.groups.robots.add(parts.group);
         rv = {
@@ -1489,6 +1503,30 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         const arr = attr.array as Float32Array;
         arr[0] = rv.group.position.x; arr[1] = 0.13; arr[2] = rv.group.position.z;
         attr.needsUpdate = true;
+      }
+
+      if(rv.routeLine && E.followId===r.id) {
+        const ray=new THREE.Raycaster();
+        const surfaces=[E.ground,E.groups.roads,E.groups.parking,E.groups.pitches,E.groups.green];
+        surfaces.forEach(o=>o.updateWorldMatrix(true,true));
+        const attr=rv.routeLine.geometry.attributes.position as THREE.BufferAttribute;
+        const points=[rv.cur,...rv.motionQueue,...pth.map(p=>({x:p[0],z:p[1]}))];
+        let count=0, travelled=0;
+        const add=(x:number,z:number)=>{
+          ray.set(new THREE.Vector3(x,2,z),new THREE.Vector3(0,-1,0));
+          const height=ray.intersectObjects(surfaces,true).find(h=>h.point.y<.5)?.point.y || 0;
+          attr.setXYZ(count++,x,height+.008,z);
+        };
+        if(pth.length) {
+          add(rv.cur.x,rv.cur.z);
+          for(let j=1;j<points.length && count<160 && travelled<12;j++) {
+            const a=points[j-1],b=points[j],length=Math.hypot(b.x-a.x,b.z-a.z),parts=Math.max(1,Math.ceil(length/.15));
+            for(let k=1;k<=parts && count<160 && travelled<12;k++) {
+              const t=k/parts;add(a.x+(b.x-a.x)*t,a.z+(b.z-a.z)*t);travelled+=length/parts;
+            }
+          }
+        }
+        rv.routeLine.geometry.setDrawRange(0,count);attr.needsUpdate=true;
       }
 
       // 任务队列可视化：黄色折线 + 编号立柱，已走完的站变绿
@@ -1572,7 +1610,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     for (const [id, rv] of E.robots) {
       if (seen.has(id)) continue;
       E.groups.robots.remove(rv.parts.group, rv.trail);
-      if (rv.routeLine) E.groups.robots.remove(rv.routeLine);
+      if (rv.routeLine) { E.groups.robots.remove(rv.routeLine);disposeDeep(rv.routeLine); }
       if (rv.queueGroup) E.groups.robots.remove(rv.queueGroup);
       disposeDeep(rv.parts.group); rv.trail.geometry.dispose();
       if (rv.queueGroup) disposeDeep(rv.queueGroup);
@@ -1674,7 +1712,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           new THREE.RingGeometry(0.55, 0.72, 32),
           new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
         ring.rotation.x = -Math.PI / 2;
-        ring.position.y = .006/parts.group.scale.y;
+        ring.position.y = .016;
         ring.visible = false;
         const label = B.makeLabelSprite(`${s.name} ${s.arrival}`, { small: true });
         label.position.y = 1.8;
@@ -1776,6 +1814,18 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     }
     E.renderer.shadowMap.needsUpdate=true;
   }, [props.pedestrians,peopleModels]);
+
+  useEffect(() => {
+    const E=eng.current;if(!E)return;
+    const old=E.scene.getObjectByName('navigation-decor');
+    if(old){E.scene.remove(old);disposeDeep(old);}
+    const ray=new THREE.Raycaster();
+    const surfaces=[E.ground,E.groups.roads,E.groups.parking,E.groups.pitches,E.groups.green];
+    surfaces.forEach(o=>o.updateWorldMatrix(true,true));
+    const ground=(x:number,z:number)=>{ray.set(new THREE.Vector3(x,2,z),new THREE.Vector3(0,-1,0));return ray.intersectObjects(surfaces,true).find(h=>h.point.y<.5)?.point.y || 0;};
+    const group=navigationDecor(props.navigationState, [2,3,4].includes(props.showcaseStep ?? -1),ground);
+    E.scene.add(group);
+  },[props.navigationState,props.showcaseStep]);
 
   useImperativeHandle(ref, () => ({
     previewPedestrian() {

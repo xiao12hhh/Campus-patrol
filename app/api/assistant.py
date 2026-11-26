@@ -11,6 +11,7 @@ from typing import Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+from app.services.project_knowledge import project_answer, load_knowledge
 from app.services.campus_data import places_by_name
 from app.services.campus_grid import CampusGrid
 from app.services.robot_simulator import campus_grid
@@ -33,6 +34,7 @@ class Question(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
     start: str | None = Field(default=None, max_length=100)
     end: str | None = Field(default=None, max_length=100)
+    context_topics: list[str] = Field(default_factory=list, max_length=3)
     history: list[Message] = Field(default_factory=list, max_length=10)
 
 
@@ -50,7 +52,7 @@ async def status():
         ready = any(m['name'] == MODEL for m in data.get('models', []))
     except Exception:
         ready = False
-    return {'ready': ready, 'model': MODEL, 'places': sorted(places_by_name())}
+    return {'ready': ready, 'model': MODEL, 'places': sorted(places_by_name()), 'knowledge_topics': len(load_knowledge()['topics'])}
 
 
 def mentioned(text, places):
@@ -112,6 +114,10 @@ def chat(body):
 
 @router.post('/chat')
 async def ask(body: Question):
+    if not body.start and not body.end:
+        knowledge = await asyncio.to_thread(project_answer, body.message, body.context_topics)
+        if knowledge is not None:
+            return knowledge
     places = places_by_name()
     names = mentioned(body.message, places)
     start, end = body.start, body.end

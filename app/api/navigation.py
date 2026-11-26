@@ -108,12 +108,12 @@ async def demo_reset():
     # Deterministic open corridor inside campus, with room to detour around its midpoint.
     for z in range(-30, 1, 2):
         for x in range(-50, -10, 2):
-            start, goal = (x,z), (x+6,z)
+            start, goal = (x,z), (x+3,z)
             if not all(any(_inside(*p,r) for r in rings) for p in (start,goal)):
                 continue
             if not g.segment_clear(*start,*goal):
                 continue
-            item = dict(id='demo-construction',x=x+3,z=z,radius=.6,kind='施工')
+            item = dict(id='demo-construction',x=x+1.5,z=z,radius=.35,kind='施工')
             g.obstacles[item['id']] = item
             detour = g.plan(start, goal)
             del g.obstacles[item['id']]
@@ -181,12 +181,26 @@ async def showcase_step(body: ShowcaseStep):
     if body.step in (2, 3):
         await demo_obstacle()
     if body.step in (1, 3):
+        ROBOTS[0]['cooperative'] = True
         await demo_start()
     if body.step == 4:
-        from app.services.pedestrians import populate
+        goal = dict(ROBOTS[0]['queue'][0])
         await allocate()
-        populate(grid_or_fail(), ROBOTS, 36, seed=42)
-        simulator.people_moving = True
+        simulator.set_queue(ROBOTS[0]['id'], [goal])
+        ROBOTS[0]['cooperative'] = True
+        g = grid_or_fail()
+        # A visible, reproducible gathering in the selected robot's corridor.
+        for i, offset in enumerate((-.65, 0, .65)):
+            item = dict(id=f'ped-demo-{i}', x=DEMO_OBSTACLE['x'], z=DEMO_OBSTACLE['z']+offset,
+                        radius=.2, kind='行人', heading=-math.pi/2, color=i%2)
+            if not g.segment_clear(item['x'], item['z'], item['x'], item['z']):
+                raise HTTPException(409, '演示通道无法放置行人，请重播')
+            g.set_obstacle(item)
+        position = ROBOTS[0]['x'], ROBOTS[0]['z']
+        simulator._navigate(ROBOTS[0], goal)
+        ROBOTS[0]['x'], ROBOTS[0]['z'] = position
+        ROBOTS[0]['comparison'] = dict(before=[list(position), [goal['x'],goal['z']]], after=[list(position), *ROBOTS[0]['path']], revision=g.revision)
+        simulator.people_moving = False
         simulator.control(None, 'start')
     return await state()
 

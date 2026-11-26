@@ -21,7 +21,10 @@ def test_thin_wall_cannot_be_crossed_between_free_endpoints(tmp_path):
     assert x < 0, (x, z)
 
 
-def test_all_patrol_legs_progress_without_crossing_buildings():
+def test_all_patrol_legs_progress_without_crossing_buildings(monkeypatch):
+    from app.services import robot_simulator as rs
+    clock = [0.0]
+    monkeypatch.setattr(rs, 'monotonic', lambda: clock[0])
     grid = campus_grid()
     sim = RobotSimulator()
     for index, route in enumerate(ROUTES.values()):
@@ -30,6 +33,7 @@ def test_all_patrol_legs_progress_without_crossing_buildings():
         for goal in route[1:] + route[:1]:
             arrived = False
             for _ in range(2000):
+                clock[0] += 1.0  # Each simulator tick advances real retry time.
                 before = (robot['x'], robot['z'])
                 arrived = sim._navigate(robot, goal)
                 after = (robot['x'], robot['z'])

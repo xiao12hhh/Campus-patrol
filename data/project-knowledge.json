@@ -1,0 +1,422 @@
+{
+  "version": 1,
+  "topics": [
+    {
+      "id": "overview",
+      "title": "项目功能与知识点总览",
+      "keywords": [
+        "功能",
+        "技术栈",
+        "架构",
+        "知识点",
+        "数据结构",
+        "整体",
+        "介绍项目"
+      ],
+      "concepts": "React + TypeScript 管理界面状态，Three.js 绘制三维校园；FastAPI 提供接口，WebSocket 同步机器人状态。",
+      "steps": [
+        "校园模型：坐标换算、几何建模、材质与相机。",
+        "巡检避障：栅格图、AVL 索引、A*、碰撞几何、有限状态机。",
+        "多机协同：有序遍历、站点分区、安全间距；运动展示：插值、路径队列、两连杆逆运动学。",
+        "车辆配送：VRPTW 容量和时间窗约束；校园 AI：本地模型、项目资料检索和独立路线计算。"
+      ],
+      "limits": "这是仿真演示，未接入真实机器狗、激光雷达、视觉识别或真实定位设备。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "app/main.py",
+          "symbol": "app / websocket_endpoint",
+          "sha256": "f7dfc1c36ec741b1121f8948769c8a0ca11270fa8faa334ffe35f38f74fbb25d"
+        },
+        {
+          "path": "frontend/src/components/CampusScene.tsx",
+          "symbol": "CampusScene",
+          "sha256": "e62e5185d4d541bfcd6b3b7dd892370e92606124ab3ad373bb79cc93229b1d7c"
+        }
+      ]
+    },
+    {
+      "id": "avl",
+      "title": "AVL 平衡二叉树索引",
+      "keywords": [
+        "avl",
+        "平衡二叉树",
+        "树高",
+        "旋转",
+        "二叉搜索树"
+      ],
+      "concepts": "二叉搜索树、树高、平衡因子、单旋与双旋、有序遍历。",
+      "steps": [
+        "Node 存储 key、value、左右孩子与高度；put 插入或更新后沿递归返回路径更新高度。",
+        "左右子树高度差超过 1 时旋转；内侧失衡先旋子树，再旋当前节点。get 按键比较查找，items 中序输出。",
+        "CampusGrid.node 以栅格编号为键，按需存储格心位置、邻接节点及通行代价；A* 通过它读取邻接关系。",
+        "allocate 另外建立一个以 (x,z,name) 为键的 AVL，遍历后按机器人数量切分站点。"
+      ],
+      "limits": "AVL 不是路径搜索算法，也不是 A* 的优先队列；本项目 A* 的开放集使用 Python heapq。不能仅凭树高或一次耗时声称整体规划效率提升。",
+      "complexity": "AVL 查找、插入或更新为 O(log n)，中序遍历 O(n)，空间 O(n)。这不是整个 A* 规划的总复杂度。",
+      "sources": [
+        {
+          "path": "app/services/avl.py",
+          "symbol": "AVL.put / AVL.get / AVL.items / rotate",
+          "sha256": "cc1d8924029aa1171c47aa43a53b01017a599fcc2ed5c6dde4ed968fdbe6b4f0"
+        },
+        {
+          "path": "app/services/campus_grid.py",
+          "symbol": "CampusGrid.node",
+          "sha256": "0d784423155c8aef6c0861fd5a19e6e6157891886b72154175f1782a903e0769"
+        },
+        {
+          "path": "app/api/navigation.py",
+          "symbol": "allocate",
+          "sha256": "108d29d5cb24879c8db5ee0c1822ea098d2451a4cddb08a227fe0980183a3067"
+        }
+      ]
+    },
+    {
+      "id": "astar",
+      "title": "A* 路径搜索与避障",
+      "keywords": [
+        "a*",
+        "astar",
+        "a-star",
+        "寻路",
+        "路径规划",
+        "路线规划",
+        "最短路径",
+        "启发",
+        "栅格"
+      ],
+      "concepts": "图搜索、八邻域栅格、优先队列、g+h 启发式估价、前驱回溯、路径平滑。",
+      "steps": [
+        "建筑轮廓生成阻挡栅格，每格 0.4 场景单位，即 4 米；保留安全间距。",
+        "开放集用 heapq；g 累计邻接代价，h 为格坐标的欧氏距离，优先扩展 g+h 较小的节点。",
+        "邻接记录从 AVL 按需取得；禁止对角切过墙角，搜索时检查建筑与动态圆形障碍。",
+        "通过 came 前驱回溯路线；拉绳平滑跳过可直达的中间点，再检查线段可通行性。",
+        "单轮规划默认预算 0.5 秒，超时保留搜索进度供后续重试；障碍版本改变使旧搜索失效。"
+      ],
+      "limits": "栅格分辨率、预算及后续平滑限制了结果，不能宣称任意场景都得到连续空间全局最短路。地图可通行空地不等于已核验的人行道路。",
+      "complexity": "开销取决于实际扩展节点和碰撞检查；heapq 单次插入/弹出 O(log n)，AVL 查询 O(log n)，不能把总搜索复杂度直接写成 O(log n)。",
+      "sources": [
+        {
+          "path": "app/services/campus_grid.py",
+          "symbol": "CampusGrid.plan / CampusGrid._plan / CampusGrid.node",
+          "sha256": "0d784423155c8aef6c0861fd5a19e6e6157891886b72154175f1782a903e0769"
+        }
+      ]
+    },
+    {
+      "id": "obstacles",
+      "title": "施工、行人和穿墙防护",
+      "keywords": [
+        "施工",
+        "行人",
+        "人群",
+        "避障",
+        "穿墙",
+        "障碍",
+        "碰撞",
+        "重规划"
+      ],
+      "concepts": "点在多边形内判断、点到线段距离、线段相交、障碍膨胀、版本失效。",
+      "steps": [
+        "建筑用多边形表示，施工和行人用带半径的圆表示；dynamic_clear 将障碍半径加上机器人安全余量。",
+        "segment_clear 检查整个移动线段与建筑边界及圆形障碍，而不只检查终点，降低穿墙风险。",
+        "障碍变化递增 revision，机器人重新规划；移动行人时先检查剩余路线是否受影响，避免每次都盲目重算。",
+        "行人按 heading 缓慢移动，遇建筑、其他行人或机器人则转向；三维人物与规划障碍共用位置。",
+        "导览用三名站立行人组成可复现的聚集示例；普通模式可随机生成行人并开启移动。"
+      ],
+      "limits": "行人是程序模拟，不是摄像头识别；狭窄通道可能等待或无解。静态行人导览并不是专门的横穿道路预测模型。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "app/services/campus_grid.py",
+          "symbol": "dynamic_clear / segment_clear",
+          "sha256": "0d784423155c8aef6c0861fd5a19e6e6157891886b72154175f1782a903e0769"
+        },
+        {
+          "path": "app/services/pedestrians.py",
+          "symbol": "populate / move_people",
+          "sha256": "dc36e6247b0777bb8411a5ccea5b7542478dd236e763427a7f912c2beb132896"
+        },
+        {
+          "path": "app/services/robot_simulator.py",
+          "symbol": "loop / _navigate",
+          "sha256": "742ed0365f6ec5669a0bc772735f971f8744becac7d98d02ef8ff6c3a910e912"
+        },
+        {
+          "path": "app/api/navigation.py",
+          "symbol": "showcase_step",
+          "sha256": "108d29d5cb24879c8db5ee0c1822ea098d2451a4cddb08a227fe0980183a3067"
+        }
+      ]
+    },
+    {
+      "id": "cooperation",
+      "title": "多机器人协同分区",
+      "keywords": [
+        "多机",
+        "多机器人",
+        "协同",
+        "分区",
+        "分配",
+        "冲突",
+        "避让"
+      ],
+      "concepts": "有序索引、中序遍历、任务队列、基于距离的停车避让。",
+      "steps": [
+        "将巡检站点按 (x,z,name) 放入 AVL，再中序遍历得到按空间坐标排列的列表。",
+        "机器人按 x 排序，把站点列表连续切成若干段，给每台机器狗设置独立队列。",
+        "cooperative 队列循环执行；移动线段与其他机器狗距离小于阈值时停车，并记录 yielding_to。"
+      ],
+      "limits": "互不重复的是分配到的站点，转场路线仍可能重叠；没有完整的多智能体时空预约算法，不能保证无死锁或全局最优分区。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "app/api/navigation.py",
+          "symbol": "allocate",
+          "sha256": "108d29d5cb24879c8db5ee0c1822ea098d2451a4cddb08a227fe0980183a3067"
+        },
+        {
+          "path": "app/services/robot_simulator.py",
+          "symbol": "_advance / _move_toward",
+          "sha256": "742ed0365f6ec5669a0bc772735f971f8744becac7d98d02ef8ff6c3a910e912"
+        }
+      ]
+    },
+    {
+      "id": "motion",
+      "title": "机器狗步态与平滑运动",
+      "keywords": [
+        "步态",
+        "动画",
+        "运动",
+        "平滑",
+        "插值",
+        "逆运动学",
+        "ik",
+        "腿",
+        "第一人称",
+        "第三人称",
+        "相机"
+      ],
+      "concepts": "有序位置队列、按帧时间分配移动距离、角度平滑、两连杆逆运动学、透视投影。",
+      "steps": [
+        "前端沿收到的位置队列分配移动距离，逐段推进，不预测到尚未收到的位置。",
+        "根据实际位移计算朝向和累计步态相位，避免速度变化造成相位跳变。",
+        "footCycle 区分支撑与摆动阶段；solveLeg 用两连杆几何和余弦关系求髋、膝角度。",
+        "相机跟随、拖动和方向键控制观察角；第三人称设置最小离体距离，墙面阻挡时尝试侧面和上方机位，过渡位置再次校验。返回全景交还 OrbitControls 控制权。",
+        "名牌按相机深度和视场角换算世界尺寸，尽量维持固定屏幕像素大小。",
+        "第三人称显示当前规划路线的淡色细线，采样路面高度并限制近景显示范围，减少遮挡和重建开销。"
+      ],
+      "limits": "这是渲染层运动近似，并非真实动力学或机器人关节控制；人物 OBJ 没有骨骼动画，用轻量顶点形变模拟走动。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "frontend/src/lib/robotMotion.ts",
+          "symbol": "advanceRobot / travelPhase / labelWorldHeight",
+          "sha256": "4a0cd7ff1aa7ddc27fff6c4967741f363783b61f096ae9c75fdaf3815daa292d"
+        },
+        {
+          "path": "frontend/src/lib/legIK.ts",
+          "symbol": "solveLeg / footCycle",
+          "sha256": "57ef17af62a11854c7460b5023808ce65493c87d02d018e2f7ec929734436f46"
+        },
+        {
+          "path": "frontend/src/components/CampusScene.tsx",
+          "symbol": "CampusScene",
+          "sha256": "e62e5185d4d541bfcd6b3b7dd892370e92606124ab3ad373bb79cc93229b1d7c"
+        },
+        {
+          "path": "frontend/src/components/scene/people.ts",
+          "symbol": "makePerson",
+          "sha256": "05a1d9ae85897af46555e3af958c4dd5f8214136f521df44196e5c780aa6e8cc"
+        },
+        {
+          "path": "frontend/src/lib/followCamera.ts",
+          "symbol": "constrainFollowCamera",
+          "sha256": "5cb1f308c794b622ba0e95c7cb7978f1eef2bce1d20c56f5b1384fedb2c847a1"
+        }
+      ]
+    },
+    {
+      "id": "rendering",
+      "title": "校园建模、材质和地面",
+      "keywords": [
+        "三维",
+        "3d",
+        "three",
+        "模型",
+        "地图还原",
+        "地面",
+        "材质",
+        "草地",
+        "贴图",
+        "建模"
+      ],
+      "concepts": "多边形几何、坐标转换、纹理 UV、光照阴影、细节层次与资源复用。",
+      "steps": [
+        "校园数据从 public/data/campus-local.json 读取：x 向东、z 向南，1 场景单位代表 10 米。",
+        "Three.js 根据轮廓构建楼体、道路与绿地，附加屋顶、立面与植被细节。",
+        "草地和路面用 Canvas 生成纹理，按米制尺度重复；路面使用颜色、凹凸和粗糙度贴图。",
+        "通过合并几何、共享模型资源、按距离隐藏细节以及自适应像素比控制绘制负担。"
+      ],
+      "limits": "建筑为依据已有地理数据与校园布局的近似重建，不能称为完整实测高精度数字孪生。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "frontend/src/lib/campus.ts",
+          "symbol": "CampusData",
+          "sha256": "0317f049a839251f48ed66374afa5c2b0b8f8347f49be409b9ade23da9bc36e7"
+        },
+        {
+          "path": "frontend/src/components/scene/paving.ts",
+          "symbol": "buildRoadsPaved / makeCampusGround",
+          "sha256": "ef94c727b3b2a3d04e66de790de44ea9f0bd8b361edb3a329dad0c3b8d17fc7b"
+        },
+        {
+          "path": "frontend/src/components/CampusScene.tsx",
+          "symbol": "CampusScene",
+          "sha256": "e62e5185d4d541bfcd6b3b7dd892370e92606124ab3ad373bb79cc93229b1d7c"
+        }
+      ]
+    },
+    {
+      "id": "realtime",
+      "title": "实时通信与机器人状态机",
+      "keywords": [
+        "websocket",
+        "实时",
+        "通信",
+        "后端",
+        "前后端",
+        "状态机",
+        "充电",
+        "返航",
+        "断线"
+      ],
+      "concepts": "WebSocket 推送、HTTP 接口、重连退避、有限状态机。",
+      "steps": [
+        "FastAPI 提供校园、巡检、导航等 HTTP 接口，/ws/robots 推送机器人状态和事件。",
+        "后端模拟器维护巡检中、检测中、返航、充电中、待命等状态；低电量触发返航。",
+        "前端 robotSocket 断开后延迟重连，App 在连接异常时使用 REST 轮询补充状态。"
+      ],
+      "limits": "界面电量、位置和告警来自模拟器；不是接入真实设备后测得的数据。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "app/main.py",
+          "symbol": "websocket_endpoint",
+          "sha256": "f7dfc1c36ec741b1121f8948769c8a0ca11270fa8faa334ffe35f38f74fbb25d"
+        },
+        {
+          "path": "app/services/robot_simulator.py",
+          "symbol": "RobotSimulator._tick / _broadcast",
+          "sha256": "742ed0365f6ec5669a0bc772735f971f8744becac7d98d02ef8ff6c3a910e912"
+        },
+        {
+          "path": "frontend/src/lib/api.ts",
+          "symbol": "robotSocket",
+          "sha256": "e5b50c67b831820352b879c830ac024b4f35ccfd76e9deca5951c6c76d6cd33c"
+        }
+      ]
+    },
+    {
+      "id": "vrptw",
+      "title": "VRPTW 车辆配送规划",
+      "keywords": [
+        "vrptw",
+        "车辆",
+        "配送",
+        "时间窗",
+        "容量",
+        "ortools",
+        "or-tools"
+      ],
+      "concepts": "带时间窗的车辆路径问题、容量约束、启发式求解、贪心降级。",
+      "steps": [
+        "接收车辆容量、上下班时间、任务点需求和时间窗，构造距离矩阵。",
+        "优先调用 OR-Tools RoutingModel，加入容量与时间维度，使用 PATH_CHEAPEST_ARC 初解和 GUIDED_LOCAL_SEARCH，求解时间限制 3 秒。",
+        "未安装 OR-Tools 时走按任务顺序尝试分配的贪心分支；仍有任务无法安排则报无可行解。",
+        "本模块行程距离使用经纬度平面近似距离乘 1.85 的绕路系数；与校园助手的 A* 折线长度不是同一口径。"
+      ],
+      "limits": "这是车辆调度演示，与机器狗的 A* 巡检分开。限时启发式不保证全局最优；现有求解和服务耗时处理仍应进一步校验，不能宣称所有真实配送约束均已完整实现。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "app/services/vrptw_solver.py",
+          "symbol": "solve / solve_with_ortools / travel_m",
+          "sha256": "750ecc61011386e79d3767f8c08ac45f42f20f35e4f18ba2650d45ec0e99fa0a"
+        },
+        {
+          "path": "app/api/vrptw.py",
+          "symbol": "solve_route",
+          "sha256": "01fff47ac1d92da4ccdef4e4afd0f98b55212a2654c95eb8b07698a4f28ee606"
+        }
+      ]
+    },
+    {
+      "id": "assistant",
+      "title": "校园 AI 与距离计算",
+      "keywords": [
+        "校园ai",
+        "人工智能",
+        "大模型",
+        "ollama",
+        "deepseek",
+        "问路",
+        "问答",
+        "距离",
+        "知识库",
+        "记忆"
+      ],
+      "concepts": "本地语言模型、意图分流、资料检索、几何距离累加、请求超时与并发隔离。",
+      "steps": [
+        "普通问题转给本机 Ollama 的 deepseek-r1:1.5b；项目知识问题优先检索维护在仓库内的结构化资料。",
+        "真实问路请求解析地点或使用下拉框起终点，交给独立 CampusGrid 规划器，复制当前障碍快照。",
+        "距离等于路线各段欧氏长度之和乘 10；步行时间按 1.2 米/秒估算，不由语言模型猜数。",
+        "项目资料按主题匹配，回答列出知识点、实现步骤、限制和源码位置；项目资料与模型对话不是同一份记忆。"
+      ],
+      "limits": "没有训练或微调模型，也没有向量数据库；使用轻量关键词检索。浏览器对话仅保存在当前页面内存，刷新后不会永久记住聊天。项目资料需要随代码维护。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "app/api/assistant.py",
+          "symbol": "ask / chat / route",
+          "sha256": "27666ab464473b62eeaade51a3f2f7108ec0a26c153bfe70ed924585d87d8f84"
+        }
+      ]
+    },
+    {
+      "id": "showcase",
+      "title": "六步讲解导览",
+      "keywords": [
+        "导览",
+        "讲解",
+        "演示",
+        "重播",
+        "展示",
+        "复位"
+      ],
+      "concepts": "状态管理、可复现测试场景、接口编排、相机控制。",
+      "steps": [
+        "前端 Showcase 按六步推进，每次请求 /api/navigation/showcase/step，后端重置任务与障碍再准备本步。",
+        "施工步骤展示暂停、固定障碍、前后路线与恢复巡检；行人步骤用三名站立行人展示绕行。",
+        "镜头直接对准演示通道，讲解面板显示步骤与状态；退出会暂停机器人、行人并恢复观察设置。"
+      ],
+      "limits": "复位会清空原任务和障碍，不恢复进入演示前的任务；演示中的成功不能证明任意随机场景都无等待。",
+      "complexity": "",
+      "sources": [
+        {
+          "path": "app/api/navigation.py",
+          "symbol": "showcase_step / showcase_exit",
+          "sha256": "108d29d5cb24879c8db5ee0c1822ea098d2451a4cddb08a227fe0980183a3067"
+        },
+        {
+          "path": "frontend/src/components/Showcase.tsx",
+          "symbol": "Showcase",
+          "sha256": "240f90aa0f4aaac5d980f599fa921699d97ebe2b68b8151a316e27de1bffe45a"
+        }
+      ]
+    }
+  ]
+}

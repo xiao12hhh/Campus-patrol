@@ -3,11 +3,12 @@ import { API_BASE } from '../lib/api';
 import type { CampusData } from '../lib/campus';
 import './CampusAssistant.css';
 
-type Reply = { answer: string; source: string; route?: { start: string; end: string; points: number[][]; meters: number; revision: number } };
+type Reply = { topic_ids?: string[]; references?: {path:string;symbol:string;current:boolean}[]; answer: string; source: string; route?: { start: string; end: string; points: number[][]; meters: number; revision: number } };
 type Entry = { role: 'user' | 'assistant'; content: string; reply?: Reply };
 
 export default function CampusAssistant({ campus, demoRequest = 0 }: { campus: CampusData | null; demoRequest?: number }) {
   const [open, setOpen] = useState(false);
+  const [knowledgeCount, setKnowledgeCount] = useState(0);
   const [ready, setReady] = useState(false);
   const [places, setPlaces] = useState<string[]>([]);
   const [start, setStart] = useState('图书馆');
@@ -24,7 +25,7 @@ export default function CampusAssistant({ campus, demoRequest = 0 }: { campus: C
     const controller = new AbortController();
     fetch(`${API_BASE}/api/assistant/status`, { signal: controller.signal }).then(r => {
       if (!r.ok) throw Error(); return r.json();
-    }).then(d => { setReady(d.ready); setPlaces(d.places); }).catch(() => setReady(false));
+    }).then(d => { setReady(d.ready); setPlaces(d.places); setKnowledgeCount(d.knowledge_topics || 0); }).catch(() => setReady(false));
     return () => controller.abort();
   }, [open]);
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'nearest' }); }, [messages, busy, open]);
@@ -38,7 +39,7 @@ export default function CampusAssistant({ campus, demoRequest = 0 }: { campus: C
     try {
       const response = await fetch(`${API_BASE}/api/assistant/chat`, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ message: text, ...(route ? { start, end } : {}), history: messages.slice(-6).map(m => ({ role: m.role, content: m.content.slice(0, 2000) })) }) });
+        body: JSON.stringify({ message: text, context_topics: [...messages].reverse().find(m=>m.role==='assistant')?.reply?.topic_ids || [], ...(route ? { start, end } : {}), history: messages.slice(-6).map(m => ({ role: m.role, content: m.content.slice(0, 2000) })) }) });
       if (!response.ok) throw Error('问答服务不可用，请重新运行 start.bat 启动新版后端。');
       const reply: Reply = await response.json();
       setMessages(old => [...old, { role: 'assistant', content: reply.answer, reply }]);
@@ -64,9 +65,12 @@ export default function CampusAssistant({ campus, demoRequest = 0 }: { campus: C
     {open && <section className="assistant-panel" aria-label="校园 AI 助手">
       <header><div><strong>校园 AI 助手</strong><small>{ready ? '本地 AI 在线 · 无 API 费用' : '本地 AI 未连接 · 可查询地图路线'}</small></div><button onClick={() => setOpen(false)} aria-label="收起助手">×</button></header>
       <div className="assistant-route"><label>起点<select aria-label="路线起点" value={start} onChange={e => setStart(e.target.value)}>{places.map(p => <option key={p}>{p}</option>)}</select></label><label>终点<select aria-label="路线终点" value={end} onChange={e => setEnd(e.target.value)}>{places.map(p => <option key={p}>{p}</option>)}</select></label><button disabled={busy || !places.length} onClick={() => send(`从${start}到${end}怎么走？`, true)}>查询路线与距离</button></div>
+      <div className="assistant-knowledge"><small>项目记忆 · {knowledgeCount} 个主题 · 含实现依据</small><div>
+        {['本项目有哪些功能和知识点？','AVL 和 A* 分别做什么？','机器狗步态怎么实现？'].map(q=><button key={q} disabled={busy} onClick={()=>void send(q)}>{q}</button>)}
+      </div></div>
       <div className="assistant-messages" aria-live="polite" aria-busy={busy}>
-        {!messages.length && <div className="assistant-welcome">你好！可以问我校园路线、距离或普通问题。<p>试试：“从图书馆到体育馆多远？”</p><button onClick={() => send('什么是 AVL 平衡二叉树？')}>什么是 AVL 平衡二叉树？</button></div>}
-        {messages.map((m, i) => <article className={`assistant-message ${m.role}`} key={i}><small>{m.role === 'user' ? '你' : m.reply?.source || '系统提示'}</small><div>{m.content}</div>{m.reply?.route && routeMap(m.reply.route)}</article>)}
+        {!messages.length && <div className="assistant-welcome">你好！可以问我项目知识点、实现过程、代码位置，也可以查询校园路线与距离。<p>试试：“从图书馆到体育馆多远？”</p><button onClick={() => send('什么是 AVL 平衡二叉树？')}>什么是 AVL 平衡二叉树？</button></div>}
+        {messages.map((m, i) => <article className={`assistant-message ${m.role}`} key={i}><small>{m.role === 'user' ? '你' : m.reply?.source || '系统提示'}</small><div>{m.content}</div>{m.reply?.route && routeMap(m.reply.route)}{m.reply?.references?.length ? <details className="assistant-sources"><summary>查看实现依据（{m.reply.references.length}）</summary>{m.reply.references.map((r,j)=><div key={j}><code>{r.path}</code><br/>{r.symbol}{!r.current && <b> · 源码已变化，待核验</b>}</div>)}</details> : null}</article>)}
         {busy && <p className="assistant-pending" role="status">正在回答，请稍候… 本地模型首次加载可能需要一些时间。</p>}<div ref={bottom} />
       </div>
       <form onSubmit={e => { e.preventDefault(); void send(input); }}><input aria-label="向校园助手提问" placeholder="输入问题，Enter 发送" maxLength={1000} value={input} onChange={e => setInput(e.target.value)} /><button disabled={busy || !input.trim()}>发送</button></form>

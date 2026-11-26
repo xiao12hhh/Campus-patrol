@@ -68,6 +68,21 @@ async def main():
             await command('Input.dispatchKeyEvent',dict(type='keyUp',key='r',code='KeyR',windowsVirtualKeyCode=82))
             assert await evaluate("window.__scene_debug.look().every(n=>n===0)"), 'R did not recenter'
             assert await evaluate("window.__scene_debug.modelScale()===.1"), 'Dog size was not reduced'
+            OP.open(urllib.request.Request('http://127.0.0.1:8765/api/navigation/demo/reset',data=b'',method='POST'),timeout=10).close()
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='近距离第三人称').click()")
+            await asyncio.sleep(2)
+            assert await evaluate("window.__scene_debug.followCamera()?.routeVisible && window.__scene_debug.followCamera()?.routePoints>1"), 'Subtle third-person route missing'
+            for i in range(18):
+                await command('Input.dispatchMouseEvent',dict(type='mousePressed',x=x,y=y,button='left',clickCount=1))
+                await command('Input.dispatchMouseEvent',dict(type='mouseMoved',x=x+90,y=y+(80 if i%2 else -80),buttons=1))
+                await command('Input.dispatchMouseEvent',dict(type='mouseReleased',x=x+90,y=y+(80 if i%2 else -80),button='left',clickCount=1))
+                await asyncio.sleep(.08)
+                metric=await evaluate("window.__scene_debug.followCamera()")
+                assert metric['distance']>=.219, ('Camera entered robot body',metric)
+            shot=await command('Page.captureScreenshot',dict(format='png'))
+            (ROOT/'_shots'/'robot-third-route.png').write_bytes(base64.b64decode(shot['data']))
+            await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='机器狗第一人称').click()")
+            await asyncio.sleep(.3)
             await evaluate("window.__frames=[]; window.__last=performance.now(); window.__record=true; function frame(t){if(!window.__record)return;window.__frames.push(t-window.__last);window.__last=t;requestAnimationFrame(frame)};requestAnimationFrame(frame)")
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='退出第一人称').click()")
             await asyncio.sleep(3)

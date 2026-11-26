@@ -71,7 +71,7 @@ async def main():
                 await click('下一步')
                 await wait_stage(stage)
                 await asyncio.sleep(2)
-                if stage in (2,4):
+                if stage == 2:
                     assert await evaluate("window.__scene_debug.follow()==='SPOT-01' && window.__scene_debug.closeThird()"), 'Follow view missing'
                 if stage == 3:
                     await click('重播本步')
@@ -99,6 +99,8 @@ async def main():
             assert await evaluate("window.__scene_debug.follow()===null && window.__scene_debug.controls()")
             await evaluate("document.querySelector('.assistant-toggle').click()")
             print('SHOWCASE FLOW PASS',flush=True)
+            if '--flow-only' in sys.argv:
+                return
             duration = int(sys.argv[sys.argv.index('--seconds')+1]) if '--seconds' in sys.argv else 60
             async def api(path, body=None):
                 def call():
