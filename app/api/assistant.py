@@ -112,24 +112,24 @@ def chat(body):
 
 @router.post('/chat')
 async def ask(body: Question):
+    places = places_by_name()
+    names = mentioned(body.message, places)
+    start, end = body.start, body.end
+    route_intent = bool(start or end or (len(names) >= 2 and re.search('到|至', body.message)) or re.search('路线|怎么走|怎么去|多远|距离|到.*米|去.*走', body.message))
+    if route_intent:
+        if not start and len(names) >= 2:
+            start, end = names[0], names[1]
+        if start not in places or end not in places:
+            return {'answer': '请选择起点和终点，或输入“从图书馆到体育馆怎么走”。我不能确定你当前的位置。', 'source': '地图助手'}
+        if start == end:
+            return {'answer': '起终点相同，距离为 0 米。', 'source': '地图计算'}
+        live = campus_grid()
+        if live is None:
+            return {'answer': '地图尚未加载，请稍后重试。', 'source': '系统提示'}
+        return await asyncio.to_thread(route, start, end, deepcopy(live.obstacles), live.revision)
     if _busy.locked():
         return {'answer': '助手正在处理另一条问题，请稍后重试。', 'source': '系统提示'}
     async with _busy:
-        places = places_by_name()
-        names = mentioned(body.message, places)
-        start, end = body.start, body.end
-        route_intent = bool(start or end or (len(names) >= 2 and re.search('到|至', body.message)) or re.search('路线|怎么走|怎么去|多远|距离|到.*米|去.*走', body.message))
-        if route_intent:
-            if not start and len(names) >= 2:
-                start, end = names[0], names[1]
-            if start not in places or end not in places:
-                return {'answer': '请选择起点和终点，或输入“从图书馆到体育馆怎么走”。我不能确定你当前的位置。', 'source': '地图助手'}
-            if start == end:
-                return {'answer': '起终点相同，距离为 0 米。', 'source': '地图计算'}
-            live = campus_grid()
-            if live is None:
-                return {'answer': '地图尚未加载，请稍后重试。', 'source': '系统提示'}
-            return await asyncio.to_thread(route, start, end, deepcopy(live.obstacles), live.revision)
         try:
             return await asyncio.to_thread(chat, body)
         except Exception:

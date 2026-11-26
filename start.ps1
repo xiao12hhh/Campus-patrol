@@ -67,7 +67,11 @@ $expectedVersion = (& $py -c 'from app.services.runtime_version import RUNTIME_V
 $occupied = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 $reuseBackend = $false
 if ($occupied) {
-    try { $health = Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 5 }
+    try {
+        # Windows PowerShell 5 may decode JSON without charset as ANSI, corrupting Chinese paths.
+        $healthResponse = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/health" -TimeoutSec 5
+        $health = [Text.Encoding]::UTF8.GetString($healthResponse.RawContentStream.ToArray()) | ConvertFrom-Json
+    }
     catch { throw "端口 $port 被未知服务占用，未停止该服务。" }
     if ($health.service -ne 'cup-campus-twin' -or $health.project_root -ne $root) {
         throw "端口 $port 的服务无法确认为当前项目（也可能是旧启动器启动的服务）。请关闭旧校园巡视后端窗口再运行，未停止未知进程。"

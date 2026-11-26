@@ -1,3 +1,4 @@
+import Showcase from './components/Showcase';
 import CampusAssistant from './components/CampusAssistant';
 import NavigationLab from './components/NavigationLab';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -60,6 +61,8 @@ export default function App() {
     const q = new URLSearchParams(location.search).get('m');
     return q === 'robot' || q === 'route' || q === 'grid' ? (q as Module) : 'campus';
   });
+  const [showcaseActive, setShowcaseActive] = useState(false);
+  const [assistantDemo, setAssistantDemo] = useState(0);
   const [campus, setCampus] = useState<CampusData | null>(null);
   const [region, setRegion] = useState('主校区');
   const [robots, setRobots] = useState<Robot[]>(SEED_ROBOTS);
@@ -370,7 +373,7 @@ export default function App() {
   const robot = robots.find(r => r.id === selectedRobot);
 
   return (
-    <div className="app">
+    <div className={`app ${showcaseActive ? 'showcase-active' : ''}`}>
       <header>
         <div className="brand">
           <div className="brand-mark">P</div>
@@ -788,7 +791,19 @@ export default function App() {
         <span>地理数据 © OpenStreetMap contributors (ODbL) · 建筑高度按公开资料估算</span>
       </footer>
 
-      <CampusAssistant campus={campus} />
+      <Showcase onActive={setShowcaseActive} onStage={step => {
+        sceneRef.current?.tour('stop');
+        setAddPoint(false); setSelectedLandmark(null); setTod('day'); setRegion('主校区');
+        setModule(step === 0 || step < 0 ? 'campus' : 'robot');
+        setFirstPerson(false); setCloseThird(step === 1 || step === 3);
+        setFollowId(step === 1 || step === 3 ? 'SPOT-01' : null);
+        setSelectedRobot('SPOT-01'); setViewMode(step === 2 || step === 4 ? 'map' : 'twin');
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (step !== 1 && step !== 3) sceneRef.current?.resetView();
+        }));
+        if (step === 5) setAssistantDemo(n => n + 1);
+      }} />
+      <CampusAssistant campus={campus} demoRequest={assistantDemo} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

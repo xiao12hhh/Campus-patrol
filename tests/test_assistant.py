@@ -40,3 +40,11 @@ def test_model_failure_and_no_thinking_leak(monkeypatch):
         raise TimeoutError()
     monkeypatch.setattr(a, 'ollama', unavailable)
     assert '路线和距离查询仍可使用' in asyncio.run(a.ask(a.Question(message='你好')))['answer']
+
+
+def test_route_still_available_while_ai_is_busy():
+    async def check():
+        async with a._busy:
+            result = await a.ask(a.Question(message='路线', start='图书馆', end='图书馆'))
+            assert '0 米' in result['answer']
+    asyncio.run(check())

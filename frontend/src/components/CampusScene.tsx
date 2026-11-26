@@ -752,6 +752,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       peopleModels: () => engine.scene.getObjectByName('campus-pedestrians')?.children.map(p=>({id:p.name,variant:p.getObjectByName('person-model')?.userData.variant,meshes:p.children.length})),
       robotPresentation: () => Array.from(engine.robots.values()).map(r=>({id:r.id,height:r.group.userData.physicalHeight,labelScale:r.label.scale.toArray(),labelVisible:r.label.visible})),
       modelScale: () => B.DOG_SCALE,
+      resources: () => ({ ...engine.renderer.info.memory, calls: engine.renderer.info.render.calls,
+        contextLost: engine.renderer.getContext().isContextLost() }),
     };
     scene.add(engine.tiles.group);
 

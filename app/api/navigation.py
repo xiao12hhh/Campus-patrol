@@ -168,3 +168,32 @@ class PeopleMotion(BaseModel):
 async def people_motion(body: PeopleMotion):
     simulator.people_moving = body.enabled
     return await state()
+
+
+class ShowcaseStep(BaseModel):
+    step: int = Field(ge=0, le=5)
+
+
+@router.post('/showcase/step')
+async def showcase_step(body: ShowcaseStep):
+    # Each stage rebuilds its own fixture, so retry/back/replay cannot duplicate obstacles.
+    await demo_reset()
+    if body.step in (2, 3):
+        await demo_obstacle()
+    if body.step in (1, 3):
+        await demo_start()
+    if body.step == 4:
+        from app.services.pedestrians import populate
+        await allocate()
+        populate(grid_or_fail(), ROBOTS, 36, seed=42)
+        simulator.people_moving = True
+        simulator.control(None, 'start')
+    return await state()
+
+
+@router.post('/showcase/exit')
+async def showcase_exit():
+    simulator.control(None, 'pause')
+    simulator.people_moving = False
+    simulator.demo_mode = False
+    return await state()

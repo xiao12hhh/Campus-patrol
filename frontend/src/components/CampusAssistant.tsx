@@ -6,7 +6,7 @@ import './CampusAssistant.css';
 type Reply = { answer: string; source: string; route?: { start: string; end: string; points: number[][]; meters: number; revision: number } };
 type Entry = { role: 'user' | 'assistant'; content: string; reply?: Reply };
 
-export default function CampusAssistant({ campus }: { campus: CampusData | null }) {
+export default function CampusAssistant({ campus, demoRequest = 0 }: { campus: CampusData | null; demoRequest?: number }) {
   const [open, setOpen] = useState(false);
   const [ready, setReady] = useState(false);
   const [places, setPlaces] = useState<string[]>([]);
@@ -17,6 +17,8 @@ export default function CampusAssistant({ campus }: { campus: CampusData | null 
   const [messages, setMessages] = useState<Entry[]>([]);
   const bottom = useRef<HTMLDivElement>(null);
   const sending = useRef(false);
+  const activeRequest = useRef<AbortController | null>(null);
+  useEffect(() => { if (demoRequest) { setOpen(true); setStart('图书馆'); setEnd('体育馆'); setInput('从图书馆到体育馆怎么走？'); } }, [demoRequest]);
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
@@ -31,6 +33,7 @@ export default function CampusAssistant({ campus }: { campus: CampusData | null 
     sending.current = true; setBusy(true); setInput('');
     setMessages(old => [...old.slice(-19), { role: 'user', content: text }]);
     const controller = new AbortController();
+    activeRequest.current = controller;
     const timer = window.setTimeout(() => controller.abort(), 90000);
     try {
       const response = await fetch(`${API_BASE}/api/assistant/chat`, { method: 'POST',
@@ -40,8 +43,8 @@ export default function CampusAssistant({ campus }: { campus: CampusData | null 
       const reply: Reply = await response.json();
       setMessages(old => [...old, { role: 'assistant', content: reply.answer, reply }]);
     } catch (e) {
-      setMessages(old => [...old, { role: 'assistant', content: e instanceof Error && e.name !== 'AbortError' ? e.message : '回答超时，请稍后重试。' }]);
-    } finally { clearTimeout(timer); sending.current = false; setBusy(false); }
+      setMessages(old => [...old, { role: 'assistant', content: e instanceof Error && e.name !== 'AbortError' ? e.message : '已停止等待或回答超时；可以重试，也可以继续查询路线。' }]);
+    } finally { clearTimeout(timer); activeRequest.current = null; sending.current = false; setBusy(false); }
   }
   function routeMap(route: NonNullable<Reply['route']>) {
     const xs = route.points.map(p => p[0]), zs = route.points.map(p => p[1]);
@@ -67,7 +70,7 @@ export default function CampusAssistant({ campus }: { campus: CampusData | null 
         {busy && <p className="assistant-pending" role="status">正在回答，请稍候… 本地模型首次加载可能需要一些时间。</p>}<div ref={bottom} />
       </div>
       <form onSubmit={e => { e.preventDefault(); void send(input); }}><input aria-label="向校园助手提问" placeholder="输入问题，Enter 发送" maxLength={1000} value={input} onChange={e => setInput(e.target.value)} /><button disabled={busy || !input.trim()}>发送</button></form>
-      <div className="assistant-footnote">AI 回答供参考；路线按当前模型计算，不代表实地导航。</div>
+      <div className="assistant-footnote">{busy && <button type="button" onClick={() => activeRequest.current?.abort()}>停止等待</button>} AI 回答供参考；路线按当前模型计算，不代表实地导航。</div>
     </section>}
     <button className="assistant-toggle" onClick={() => setOpen(v => !v)} aria-expanded={open}>{open ? '收起助手' : '✦ 校园 AI · 问路'}</button>
   </div>;
