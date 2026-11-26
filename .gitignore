@@ -31,3 +31,7 @@ tools/_probe_out/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Original user-supplied character archives; optimized runtime assets live in public/models/people.
+/0d84c64aea3136efa1a91aa4129687e2.rar
+/73af9d7d2391cf0ff92b6190481039fb.rar

@@ -1,3 +1,4 @@
+import CampusAssistant from './components/CampusAssistant';
 import NavigationLab from './components/NavigationLab';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import CampusScene, { SceneHandle, TimeOfDay, LayerKey, DEFAULT_LAYERS, ViewPreset, FocusBox, Quality, QUALITY_LABEL, ViewMode } from './components/CampusScene';
@@ -628,7 +629,7 @@ export default function App() {
                 </div>
                 <span className="pill green">{robots.filter(r => r.status !== '待命').length} 在线</span>
               </div>
-              <NavigationLab campus={campus} />
+              <NavigationLab campus={campus} onViewPeople={()=>{setFollowId(null);setFirstPerson(false);setCloseThird(false);setViewMode('twin');requestAnimationFrame(()=>requestAnimationFrame(()=>sceneRef.current?.previewPedestrian()));}} />
               <div className="card">
                 <div className="card-title">巡检编队</div>
                 {robots.map(r => (
@@ -787,6 +788,7 @@ export default function App() {
         <span>地理数据 © OpenStreetMap contributors (ODbL) · 建筑高度按公开资料估算</span>
       </footer>
 
+      <CampusAssistant campus={campus} />
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

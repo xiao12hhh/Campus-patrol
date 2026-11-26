@@ -1,5 +1,6 @@
+import {loadPeople,makePerson,releasePerson} from './scene/people';
 import {solveLeg, footCycle} from '../lib/legIK';
-import { robotCollision, advanceRobot, motionHeading, travelPhase, Point } from '../lib/robotMotion';
+import { robotCollision, advanceRobot, motionHeading, travelPhase, labelWorldHeight, Point } from '../lib/robotMotion';
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -37,6 +38,7 @@ export interface SceneHandle {
   setAutoQuality(on: boolean): void;
   tour(cmd: 'start' | 'pause' | 'resume' | 'skip' | 'stop'): void;
   screenshot(): void;
+  previewPedestrian(): void;
 }
 
 export const DEFAULT_LAYERS: Record<LayerKey, boolean> = {
@@ -182,6 +184,7 @@ interface RobotVis {
   heading: number; targetHeading: number;
   routeLine: THREE.Line | null;
   motionQueue: Point[];
+  groundY: number; groundAt: number;
   motionEpoch?: number;
   renderSpeed: number; gaitPhase: number; gaitAmplitude: number;
   labelText: string;
@@ -621,6 +624,10 @@ function disposeGroupChildren(g: THREE.Group) {
 const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const eng = useRef<Engine | null>(null);
+  const [peopleModels,setPeopleModels]=useState<THREE.Group[]>([]);
+  const [peopleError,setPeopleError]=useState(false);
+  const personPreviewIndex=useRef(0);
+  useEffect(()=>{let live=true;loadPeople().then(models=>{if(live)setPeopleModels(models);}).catch(()=>{if(live)setPeopleError(true);});return()=>{live=false;};},[]);
   const cb = useRef(props);
   cb.current = props;
   // 取景框用 ref 持有：fitCampus 在初始化 useEffect 里同步读取，不能依赖渲染时序
@@ -742,6 +749,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       look: () => [engine.fpYaw, engine.fpPitch],
       feet: () => Array.from(engine.robots.values()).flatMap(r=>{r.group.updateMatrixWorld(true);return r.parts.legs.map(l=>l.knee.localToWorld((l.hip.userData.foot as THREE.Vector3).clone()).y);}),
       pedestrianPositions: () => engine.scene.getObjectByName('campus-pedestrians')?.children.map(p=>[p.position.x,p.position.z]),
+      peopleModels: () => engine.scene.getObjectByName('campus-pedestrians')?.children.map(p=>({id:p.name,variant:p.getObjectByName('person-model')?.userData.variant,meshes:p.children.length})),
+      robotPresentation: () => Array.from(engine.robots.values()).map(r=>({id:r.id,height:r.group.userData.physicalHeight,labelScale:r.label.scale.toArray(),labelVisible:r.label.visible})),
       modelScale: () => B.DOG_SCALE,
     };
     scene.add(engine.tiles.group);
@@ -975,11 +984,16 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         const before=person.position.clone();
         const distance=person.position.distanceTo(target);
         if(distance>1e-5) {const next=person.position.clone().lerp(target,Math.min(1,.08*dt/distance));if(E.movementClear(person.position,next))person.position.copy(next);}
+        person.position.y=target.y;
         const moved=person.position.distanceTo(before);
         person.userData.phase=(person.userData.phase || 0)+moved*65;
         const walking=moved>1e-6;
-        const limbs=person.userData.limbs as THREE.Object3D[];
-        limbs?.forEach((limb,i)=>{const desired=walking ? Math.sin(person.userData.phase+ROBOT_PHASES[i])*.35 : 0;limb.rotation.x+=(desired-limb.rotation.x)*(1-Math.exp(-10*dt));});
+        const visual=person.getObjectByName('person-model');
+        if(visual){
+          visual.userData.walkPhase.value=person.userData.phase;
+          const strength=visual.userData.walkStrength;
+          strength.value+=((walking?1:0)-strength.value)*(1-Math.exp(-10*dt));
+        }
         const delta=person.userData.heading-person.rotation.y;
         person.rotation.y+=Math.atan2(Math.sin(delta),Math.cos(delta))*(1-Math.exp(-5*dt));
       });
@@ -994,7 +1008,12 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         rv.cur.set(next.x, 0, next.z);
         const speed=travel/Math.max(dt,1e-4);
         rv.prev.copy(rv.cur);
-        rv.group.position.copy(rv.cur);
+        if(t-rv.groundAt>.2){
+          const ray=new THREE.Raycaster(new THREE.Vector3(next.x,2,next.z),new THREE.Vector3(0,-1,0));
+          rv.groundY=ray.intersectObjects([E.ground,E.groups.roads,E.groups.parking,E.groups.pitches,E.groups.green].filter(Boolean),true).find(hit=>hit.point.y<.5)?.point.y ?? 0;
+          rv.groundAt=t;
+        }
+        rv.group.position.copy(rv.cur);rv.group.position.y=rv.groundY;
         if(travel>1e-6) rv.targetHeading=motionHeading(dx,dz);
         let dh = rv.targetHeading - rv.heading;
         dh = Math.atan2(Math.sin(dh), Math.cos(dh));
@@ -1013,8 +1032,8 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           const scale=leg.hip.getWorldScale(new THREE.Vector3()).y;
           // Ground target accounts for the imported hip height and model scale.
           const hipY=leg.hip.getWorldPosition(new THREE.Vector3()).y;
-          const target={y:(.012-hipY)/scale + cycle.lift*.055/scale*amp,
-            z:leg.knee.position.z+foot.z+cycle.stride*.12/scale*amp*leg.hip.userData.direction};
+          const target={y:(rv.groundY+.003-hipY)/scale + cycle.lift*.012/scale*amp,
+            z:leg.knee.position.z+foot.z+cycle.stride*.05/scale*amp*leg.hip.userData.direction};
           const angles=solveLeg(leg.knee.position,foot,target);
           leg.hip.rotation.x=angles.hip;
           leg.knee.rotation.x=angles.knee;
@@ -1046,6 +1065,11 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           rv.trail.geometry.setDrawRange(0, Math.max(0, (pts.length - 1) * 6));
           rv.lastTrail.copy(rv.cur);
         }
+        const closeView=!!E.followId || camera.position.distanceTo(E.controls.target)<3;
+        // Overview ribbons are intentionally elevated above roads; hide them at eye level.
+        if(rv.queueGroup)rv.queueGroup.visible=!closeView;
+        if(rv.pathRibbon)rv.pathRibbon.visible=!closeView;
+        rv.trail.visible=!closeView;
         const sel = E.followId === rv.id;
         rv.ring.visible = sel;
         if (sel) {
@@ -1094,9 +1118,9 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
             const yaw = baseYaw + E.fpYaw;
             tmp.set(0, 0, -1).applyAxisAngle(Y_AXIS, yaw).normalize();
             const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(Y_AXIS, baseYaw);
-            const eye = pos.clone().addScaledVector(forward, 0.22);
-            // 眼高 0.3 单位 ≈ 3 m：狗模型缩到 0.42 后约 2.9 m 高，这个高度刚好在"头顶"
-            eye.y += 0.24;
+            const eye = pos.clone().addScaledVector(forward, 0.05);
+            // Eye height follows the meter-scaled robot, about 0.75 m above its ground surface.
+            eye.y += 0.075;
             // 离得远（刚进第一人称）直接吸附，慢机器上也不会"慢慢飘过去"
             const gapEye = camera.position.distanceTo(eye);
             camera.position.lerp(eye, gapEye > 2 ? 1 : 1 - Math.pow(1e-7, dt));
@@ -1108,12 +1132,22 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
             E.controls.enabled = false;
           } else {
             // 第三人称跟随：偏移量随狗模型一起缩小（原来按 7 m 高的狗定的 3.2/7.5）
-            tmp.set(0, cb.current.closeThird ? 0.65 + E.fpPitch * .5 : 1.15, cb.current.closeThird ? 1.2 : 2.7).applyAxisAngle(Y_AXIS, baseYaw + (cb.current.closeThird ? E.fpYaw : 0));
+            tmp.set(0, cb.current.closeThird ? 0.23 + E.fpPitch * .1 : .5, cb.current.closeThird ? .42 : 1.2).applyAxisAngle(Y_AXIS, baseYaw + (cb.current.closeThird ? E.fpYaw : 0));
             const desired = pos.clone().add(tmp);
+            const focus=pos.clone().add(new THREE.Vector3(0,.05,0));
+            const keepCameraOutsideWalls=(point:THREE.Vector3)=>{
+              const direction=point.clone().sub(focus), length=direction.length();
+              if(length<.001)return;
+              const ray=new THREE.Raycaster(focus,direction.normalize(),0,length+.03);
+              const hit=ray.intersectObject(E.groups.buildings,true)[0];
+              if(hit)point.copy(focus).addScaledVector(direction,Math.max(.04,hit.distance-.03));
+            };
+            keepCameraOutsideWalls(desired);
             // 距离太远（刚切进来/刚重建）直接吸附，否则缓动——避免和 controls.update() 拉锯导致永远跟不近
             const gap = camera.position.distanceTo(desired);
             camera.position.lerp(desired, gap > 6 ? 1 : 1 - Math.pow(0.002, dt));
-            E.controls.target.lerp(pos.clone().add(new THREE.Vector3(0, 0.32, 0)), 1 - Math.pow(0.01, dt));
+            keepCameraOutsideWalls(camera.position);
+            E.controls.target.copy(focus);
             camera.lookAt(E.controls.target);
             E.controls.enabled = false;
           }
@@ -1123,12 +1157,24 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       }
 
       // 第一人称用广角，退出时恢复；controls.update() 在第一人称下会跟 lookAt 抢相机，跳过
+      if(E.followId && camera.near!==.01){camera.near=.01;camera.updateProjectionMatrix();}
       const wantFov = firstPerson ? 72 : BASE_FOV;
       if (Math.abs(camera.fov - wantFov) > 0.05) {
         camera.fov = wantFov;
         camera.updateProjectionMatrix();
       }
       if (!E.followId && !E.tween) E.controls.update();
+      camera.updateMatrixWorld();
+      for(const rv of E.robots.values()) {
+        const world=rv.label.getWorldPosition(new THREE.Vector3());
+        const depth=-world.applyMatrix4(camera.matrixWorldInverse).z;
+        const parentScale=rv.group.getWorldScale(new THREE.Vector3());
+        const texture=rv.label.material.map?.image;
+        const aspect=texture ? texture.width/texture.height : 4;
+        const h=labelWorldHeight(depth,camera.fov,E.renderer.domElement.clientHeight,depth<2?20:24);
+        rv.label.scale.set(h*aspect/parentScale.x,h/parentScale.y,1);
+        rv.label.visible=depth>camera.near*2;
+      }
       updateLabels(E);
       renderer.render(scene, camera);
     };
@@ -1366,13 +1412,15 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         const parts = B.makeQuadruped(E.dogProto, color);
         parts.group.userData.robotId = r.id;
         const label = B.makeLabelSprite(`${r.id} · ${Math.round(r.battery)}%`, { small: true });
-        label.position.set(0, E.dogProto ? 0.92 : 1.05, 0);
+        const bodyBounds=new THREE.Box3().setFromObject(parts.group);
+        parts.group.userData.physicalHeight=bodyBounds.max.y-bodyBounds.min.y;
+        label.position.set(0,(bodyBounds.max.y+.025)/parts.group.scale.y,0);
         parts.group.add(label);
         const ring = new THREE.Mesh(
-          E.dogProto ? new THREE.RingGeometry(0.42, 0.52, 40) : new THREE.RingGeometry(0.55, 0.66, 40),
+          new THREE.RingGeometry(.1/parts.group.scale.x,.115/parts.group.scale.x,40),
           new THREE.MeshBasicMaterial({ color: 0x35e0ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
         ring.rotation.x = -Math.PI / 2;
-        ring.position.y = 0.1;
+        ring.position.y = .006/parts.group.scale.y;
         ring.visible = false;
         parts.group.add(ring);
         const cur = B.W(r.x, 0, r.z);
@@ -1401,7 +1449,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
         rv = {
           id: r.id, group: parts.group, parts, label, ring, trail, trailPts: [], lastTrail: cur.clone(),
           cur: cur.clone(), target: cur.clone(), prev: cur.clone(),
-          heading: (r.heading || 0) + Math.PI, targetHeading: (r.heading || 0) + Math.PI, routeLine, motionQueue: [], renderSpeed: 0, gaitPhase: 0, gaitAmplitude: 0, labelText: `${r.id} · ${Math.round(r.battery)}%`,
+          heading: (r.heading || 0) + Math.PI, targetHeading: (r.heading || 0) + Math.PI, routeLine, motionQueue: [], groundY: 0, groundAt: -1, renderSpeed: 0, gaitPhase: 0, gaitAmplitude: 0, labelText: `${r.id} · ${Math.round(r.battery)}%`,
           queueGroup: null, queuePins: [], queuePads: [], queueSig: '', queueIndex: 0,
           pathRibbon: null, pathSig: '',
         };
@@ -1624,7 +1672,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
           new THREE.RingGeometry(0.55, 0.72, 32),
           new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }));
         ring.rotation.x = -Math.PI / 2;
-        ring.position.y = 0.1;
+        ring.position.y = .006/parts.group.scale.y;
         ring.visible = false;
         const label = B.makeLabelSprite(`${s.name} ${s.arrival}`, { small: true });
         label.position.y = 1.8;
@@ -1703,34 +1751,42 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
     if (!E) return;
     let group=E.scene.getObjectByName('campus-pedestrians') as THREE.Group | undefined;
     if(!group){group=new THREE.Group();group.name='campus-pedestrians';E.scene.add(group);}
+    if(!peopleModels.length)return;
     const ids=new Set((props.pedestrians||[]).map(p=>p.id));
-    for(const child of [...group.children]) if(!ids.has(child.name)){group.remove(child);disposeDeep(child);}
-    const palette=[0xf16b52,0x448ed6,0xe4b53c,0x8b69bc,0x37a486];
+    for(const child of [...group.children]) if(!ids.has(child.name)){group.remove(child);releasePerson(child);}
+    const groundRay=new THREE.Raycaster();
+    const groundSurfaces=[E.ground,E.groups.roads,E.groups.parking,E.groups.pitches,E.groups.green].filter(Boolean);
+    groundSurfaces.forEach(o=>o.updateWorldMatrix(true,true));
     for(const p of props.pedestrians||[]) {
+      groundRay.set(new THREE.Vector3(p.x,2,p.z),new THREE.Vector3(0,-1,0));
+      const groundY=(groundRay.intersectObjects(groundSurfaces,true).find(hit=>hit.point.y<.5)?.point.y ?? 0)+.003;
       let person=group.getObjectByName(p.id) as THREE.Group | undefined;
       if(!person){
-        person=new THREE.Group();person.name=p.id;person.position.set(p.x,0,p.z);group.add(person);
-        const skin=new THREE.MeshStandardMaterial({color:0xd9aa85});
-        const shirt=new THREE.MeshStandardMaterial({color:palette[p.color%palette.length]});
-        const pants=new THREE.MeshStandardMaterial({color:0x293747});
-        const head=new THREE.Mesh(new THREE.SphereGeometry(.034,8,6),skin);head.position.y=.205;person.add(head);
-        const body=new THREE.Mesh(new THREE.CylinderGeometry(.032,.027,.085,8),shirt);body.position.y=.135;person.add(body);
-        const limbs:THREE.Group[]=[];
-        for(const side of [-1,1]) for(const arm of [false,true]) {
-          const pivot=new THREE.Group();pivot.position.set(side*(arm ? .047 : .018),arm ? .16 : .095,0);
-          const mesh=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,arm ? .075 : .09,6),arm?shirt:pants);
-          mesh.position.y=arm ? -.0375 : -.045;pivot.add(mesh);person.add(pivot);limbs.push(pivot);
-        }
-        person.userData.limbs=limbs;
-        person.traverse(o=>{if(o instanceof THREE.Mesh)o.castShadow=true;});
+        person=new THREE.Group();person.name=p.id;person.position.set(p.x,groundY,p.z);group.add(person);
       }
-      person.userData.target=new THREE.Vector3(p.x,0,p.z);
+      const variant=p.color%peopleModels.length;
+      if(person.userData.variant!==variant){
+        releasePerson(person);person.clear();person.add(makePerson(peopleModels[variant],variant));
+        person.userData.variant=variant;
+      }
+      person.userData.target=new THREE.Vector3(p.x,groundY,p.z);
       person.userData.heading=p.heading;
     }
     E.renderer.shadowMap.needsUpdate=true;
-  }, [props.pedestrians]);
+  }, [props.pedestrians,peopleModels]);
 
   useImperativeHandle(ref, () => ({
+    previewPedestrian() {
+      const E=eng.current;if(!E)return;
+      const people=E.scene.getObjectByName('campus-pedestrians')?.children;
+      if(!people?.length)return;
+      const person=people[personPreviewIndex.current++%people.length];
+      E.followId=null;E.tween=null;E.controls.enabled=true;E.controls.minDistance=.15;
+      E.camera.near=.01;E.camera.updateProjectionMatrix();
+      E.camera.position.copy(person.position).add(new THREE.Vector3(.28,.17,.38));
+      E.controls.target.copy(person.position).add(new THREE.Vector3(0,.09,0));
+      E.camera.lookAt(E.controls.target);
+    },
     flyToLandmark(l, preset = 'overview') {
       const E = eng.current; if (!E) return;
       const { pos, target } = poseFor(l.x, l.z, Math.max(1.2, l.height || 2), preset);
@@ -1866,7 +1922,7 @@ const CampusScene = forwardRef<SceneHandle, Props>(function CampusScene(props, r
       <div className="map-brand-chip"><span className="map-brand-mark">石</span><div><b>石大·云游校园</b><small>CHINA UNIVERSITY OF PETROLEUM · CAMPUS EXPLORER</small></div></div>
       <div className="map-compass"><b>N</b><span>▲</span></div>
       <div className="map-status"><span className="map-live-dot"/> 实时校园 · 昌平校区</div>
-      <div className="scene-hint">{props.firstPerson ? '第一人称 · 按住左键拖动 / 方向键转头 · R 回正' : props.closeThird && props.followRobotId ? '近距离第三人称 · 左键拖动观察 · R 回正' : '地理布局 · 拖拽旋转 · 滚轮缩放 · 点击建筑或机器人'}</div>
+      <div className="scene-hint">{peopleError ? '人物模型加载失败，请刷新页面重试' : props.firstPerson ? '第一人称 · 按住左键拖动 / 方向键转头 · R 回正' : props.closeThird && props.followRobotId ? '近距离第三人称 · 左键拖动观察 · R 回正' : '地理布局 · 拖拽旋转 · 滚轮缩放 · 点击建筑或机器人'}</div>
       <div className="map-attribution">校园平面图近似重建 · © OpenStreetMap contributors · ODbL</div>
     </div>
   );

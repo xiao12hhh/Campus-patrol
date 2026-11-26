@@ -72,6 +72,18 @@ async def main():
             await asyncio.sleep(3)
             assert not await evaluate("document.body.innerText.includes('移除 / 恢复通行')"), 'Obstacle removal failed'
             assert await evaluate("window.__scene_debug.pedestrianCount()===36"), 'People missing from 3D scene'
+            models=await evaluate("window.__scene_debug.peopleModels()")
+            assert len(models)==36 and {p['variant'] for p in models}=={0,1}, 'Both imported people models must be used'
+            seen_variants=set()
+            for index, person in enumerate(models):
+                await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='近看行人 / 下一位').click()")
+                await asyncio.sleep(.5)
+                if person['variant'] not in seen_variants:
+                    await asyncio.sleep(1)
+                    preview=await command('Page.captureScreenshot',dict(format='png'))
+                    (ROOT/'_shots'/f"person-model-{person['variant']}.png").write_bytes(base64.b64decode(preview['data']))
+                    seen_variants.add(person['variant'])
+                if len(seen_variants)==2: break
             before_people=await evaluate("window.__scene_debug.pedestrianPositions()")
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='开启行人走动').click()")
             await asyncio.sleep(5)
@@ -82,6 +94,12 @@ async def main():
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='近距离第三人称').click()")
             await asyncio.sleep(3)
             assert await evaluate("window.__scene_debug.closeThird() && !window.__scene_debug.fp() && window.__scene_debug.follow()!==null && !window.__scene_debug.controls()"), 'Close third-person not active'
+            presentation=await evaluate("window.__scene_debug.robotPresentation()")
+            print('ROBOT SCALE',presentation,flush=True)
+            assert all(.04 < r['height'] < .13 for r in presentation), 'Dog size inconsistent with 1.7m people'
+            followed=await evaluate("window.__scene_debug.follow()")
+            assert next(r for r in presentation if r['id']==followed)['labelScale'][0] < .15, 'Close nameplate is too large'
+
             bounds = await evaluate("(() => {const r=document.querySelector('canvas').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()")
             await command('Input.dispatchMouseEvent',dict(type='mousePressed',button='left',clickCount=1,**bounds))
             await command('Input.dispatchMouseEvent',dict(type='mouseMoved',buttons=1,x=bounds['x']+80,y=bounds['y']))
@@ -113,11 +131,13 @@ async def main():
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='近距离第三人称').click()")
             positions_before=await evaluate("window.__scene_debug.robots()")
             lifted=False
+            heights=[]
             for _ in range(15):
                 await asyncio.sleep(.15)
                 feet=await evaluate("window.__scene_debug.feet()")
                 assert min(feet)>-.025
-                lifted = lifted or max(feet)>.025
+                heights.append(feet)
+            lifted=any(max(row[i] for row in heights)-min(row[i] for row in heights)>.004 for i in range(4))
             assert lifted, 'Walking feet never lift'
             assert positions_before != await evaluate("window.__scene_debug.robots()"), 'Demo robot did not advance'
             shot=await command('Page.captureScreenshot',dict(format='png'))

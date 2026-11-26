@@ -7,7 +7,7 @@ type Bot = { comparison?: {before:number[][];after:number[][];revision:number}; 
 type State = { people_moving:boolean; demo_mode:boolean; revision: number; index: { nodes: number; height: number }; obstacles: Obstacle[]; robots: Bot[] };
 const colors = ['#18b8a6', '#f7ad42', '#8285ff'];
 
-export default function NavigationLab({campus}: {campus: CampusData | null}) {
+export default function NavigationLab({campus,onViewPeople}: {campus: CampusData | null;onViewPeople?:()=>void}) {
   const [data, setData] = useState<State | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -73,6 +73,7 @@ export default function NavigationLab({campus}: {campus: CampusData | null}) {
       <select aria-label="障碍类型" value={kind} onChange={e=>setKind(e.target.value)}><option>施工</option><option>人群</option></select>
       <label>半径（米） <input aria-label="障碍半径米" type="number" min="2" max="100" value={radius*10} style={{width:60}} onChange={e=>setRadius(Number(e.target.value)/10)} /></label>
       <button disabled={busy || !point} onClick={()=>void act('/obstacles','POST',{...point,radius,kind})}>添加障碍并重规划</button>
+      <button disabled={!data?.obstacles.some(o=>o.kind==='行人')} onClick={onViewPeople}>近看行人 / 下一位</button>
       <button disabled={busy} onClick={()=>void act('/pedestrians','POST',{count:36})}>重新随机生成行人</button>
       <button disabled={busy} onClick={()=>void act('/pedestrians/motion','POST',{enabled:!data?.people_moving})}>{data?.people_moving ? '暂停行人走动' : '开启行人走动'}</button>
       <button disabled={busy} onClick={()=>void act('/pedestrians','POST',{count:0})}>清空行人</button>

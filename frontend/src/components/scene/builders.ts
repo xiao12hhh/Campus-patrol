@@ -403,7 +403,7 @@ const DOG_LEGS = ['FL', 'FR', 'HL', 'HR'];
 
 /** 机器狗模型整体缩放：模型是按「看得见」放大做的，缩到 0.42 后约 2.9 m 高，
  *  与 20~40 m 的教学楼放在一起比例不刺眼；第一人称的相机高度也按这个缩放取值。 */
-export const DOG_SCALE = 0.32;
+export const DOG_SCALE = 0.1; // Source dog is modeled in meters; scene units are 10 meters.
 
 export interface DogProto {
   geos: THREE.BufferGeometry[];
@@ -488,7 +488,7 @@ export async function loadDogProto(base = '/models/unitree_b2'): Promise<DogProt
 
 /** 用 GLB 组装机器人。proto 为 null 时回退到程序化版本。 */
 export function makeQuadruped(proto: DogProto | null, color: number): QuadrupedParts {
-  if (!proto) { const parts = makeQuadrupedFallback(color); parts.group.scale.setScalar(0.32); return parts; }
+  if (!proto) { const parts = makeQuadrupedFallback(color); parts.group.scale.setScalar(DOG_SCALE); return parts; }
 
   const group = new THREE.Group();
   // 模型导出后头朝 +Z，而场景约定（与 heading = atan2 一致）为头朝 -Z，这里整体掉头

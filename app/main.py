@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api import campus, robots, vrptw, navigation
+from app.api import campus, robots, vrptw, navigation, assistant
 from app.services.robot_simulator import simulator
 from app.services.runtime_version import PROJECT_ROOT, RUNTIME_VERSION
 
@@ -13,6 +13,7 @@ app.include_router(campus.router)
 app.include_router(robots.router)
 app.include_router(vrptw.router)
 app.include_router(navigation.router)
+app.include_router(assistant.router)
 
 
 @app.on_event('startup')

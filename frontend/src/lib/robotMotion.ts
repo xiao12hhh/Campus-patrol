@@ -59,5 +59,10 @@ export function motionHeading(dx:number,dz:number) {return Math.atan2(-dx,-dz);}
 
 /** Accumulated travel phase never jumps when speed changes or wall-clock time grows. */
 export function travelPhase(phase:number, distance:number) {
-  return (phase + Math.max(0,distance) / .24 * Math.PI * 2) % (Math.PI*2);
+  return (phase + Math.max(0,distance) / .1 * Math.PI * 2) % (Math.PI*2);
+}
+
+/** Perspective sprite height that occupies a fixed number of CSS pixels. */
+export function labelWorldHeight(depth:number,fovDegrees:number,viewportHeight:number,pixels:number) {
+  return 2*Math.max(0,depth)*Math.tan(fovDegrees*Math.PI/360)*pixels/Math.max(1,viewportHeight);
 }

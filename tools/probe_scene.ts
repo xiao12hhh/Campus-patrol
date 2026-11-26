@@ -1,5 +1,5 @@
 import {solveLeg,footCycle} from '../frontend/src/lib/legIK';
-import { robotCollision, advanceRobot, motionHeading, travelPhase } from '../frontend/src/lib/robotMotion';
+import { robotCollision, advanceRobot, motionHeading, travelPhase, labelWorldHeight } from '../frontend/src/lib/robotMotion';
 // 离线校验：在 Node 里跑一遍新的程序化场景构建，
 // 核对性能预算，并逐台复核屋顶设备确实落在屋面安全环内（不穿女儿墙、不越屋面）。
 import * as THREE from 'three';
@@ -230,4 +230,13 @@ console.log(`\n结论: ${okGood ? 'PASS' : 'FAIL'}`);
     if(i<50 && c.lift!==0) throw new Error('Stance foot lifts from ground');
   }
   console.log('[robot-IK] forward verification / planted stance PASS');
+}
+
+{
+  for(const depth of [.15,.5,2,10,100]) {
+    const world=labelWorldHeight(depth,50,900,20);
+    const pixels=world/(2*depth*Math.tan(25*Math.PI/180))*900;
+    if(Math.abs(pixels-20)>1e-8) throw new Error('Robot label grows with camera zoom');
+  }
+  console.log('[robot-label] projected 20px across camera distances PASS');
 }

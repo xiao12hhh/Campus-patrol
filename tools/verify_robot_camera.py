@@ -67,7 +67,7 @@ async def main():
             await command('Input.dispatchKeyEvent',dict(type='keyDown',key='r',code='KeyR',windowsVirtualKeyCode=82))
             await command('Input.dispatchKeyEvent',dict(type='keyUp',key='r',code='KeyR',windowsVirtualKeyCode=82))
             assert await evaluate("window.__scene_debug.look().every(n=>n===0)"), 'R did not recenter'
-            assert await evaluate("window.__scene_debug.modelScale()===.32"), 'Dog size was not reduced'
+            assert await evaluate("window.__scene_debug.modelScale()===.1"), 'Dog size was not reduced'
             await evaluate("window.__frames=[]; window.__last=performance.now(); window.__record=true; function frame(t){if(!window.__record)return;window.__frames.push(t-window.__last);window.__last=t;requestAnimationFrame(frame)};requestAnimationFrame(frame)")
             await evaluate("Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='退出第一人称').click()")
             await asyncio.sleep(3)
